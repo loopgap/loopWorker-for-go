@@ -1,0 +1,78 @@
+# ==================== Binaries & Compiled Output ====================
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go build output
+/bin/
+web/canvas/dist/
+
+# Test & Coverage
+coverage
+coverage.html
+coverage.out
+coverage.txt
+*.coverprofile
+
+# ==================== Go ====================
+# Vendor (use go mod instead)
+# /vendor/
+
+# Go workspace
+go.work
+go.work.sum
+
+# ==================== Rust / WASM ====================
+/target/
+*.wasm
+
+# ==================== Node.js / Web ====================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+pnpm-lock.yaml
+
+# ==================== IDE & Editor ====================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==================== Tool Directories ====================
+.codegraph/
+.compose/
+.mimocode/
+
+# ==================== Runtime Data ====================
+data/events/
+data/snapshots/
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+*.db
+*.sqlite
+*.sqlite3
+
+# ==================== Logs ====================
+*.log
+logs/
+
+# ==================== Environment & Secrets ====================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ==================== Temporary Scripts ====================
+fix_encoding.py
