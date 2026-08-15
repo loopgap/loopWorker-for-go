@@ -76,3 +76,8 @@ logs/
 
 # ==================== Temporary Scripts ====================
 fix_encoding.py
+
+# Temporary format/debug files
+.*_fmt.txt
+.fmt_*.go
+*.tmpfmt
