@@ -38,11 +38,11 @@ type APIResponse struct {
 }
 
 type APIServer struct {
-	Router    *chi.Mux
-	scheduler *scheduler.Scheduler
-	wfe       *workflow.WorkflowEngine
-	executor  *executor.Executor
-	eventBus  *event.EventBus
+	Router      *chi.Mux
+	scheduler   *scheduler.Scheduler
+	wfe         *workflow.WorkflowEngine
+	executor    *executor.Executor
+	eventBus    *event.EventBus
 	rateLimiter *security.RateLimiter
 }
 
@@ -545,8 +545,8 @@ func (s *APIServer) listWorkflows(w http.ResponseWriter, r *http.Request) {
 	result := make([]map[string]interface{}, len(workflows))
 	for i, wf := range workflows {
 		result[i] = map[string]interface{}{
-			"id":   wf.ID,
-			"name": wf.Name,
+			"id":     wf.ID,
+			"name":   wf.Name,
 			"status": wf.GetStatus(),
 		}
 	}
