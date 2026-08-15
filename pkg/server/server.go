@@ -17,7 +17,6 @@ import (
 	"loopworker/internal/core/scheduler"
 	"loopworker/internal/core/selfheal"
 	"loopworker/pkg/api"
-	"loopworker/pkg/dashboard"
 	"loopworker/pkg/event"
 	"loopworker/pkg/plugin"
 	"loopworker/pkg/security"
@@ -39,7 +38,6 @@ type Server struct {
 	selfHeal       *selfheal.SelfHealer
 	security       *security.SecurityManager
 	apiServer      *api.APIServer
-	dashboard      *dashboard.Dashboard
 	eventBus       *event.EventBus
 	serviceMgr     *service.ServiceManager
 	httpServer     *http.Server
@@ -135,8 +133,7 @@ func New(config *Config) *Server {
 	sh := selfheal.NewSelfHealer(selfheal.DefaultConfig())
 	e := executor.NewExecutor(s, d, sb, bus, sh)
 	sm := security.NewSecurityManager()
-	apiSrv := api.NewAPIServer(s, e, bus, wfe)
-	dash := dashboard.NewDashboard(s, o, bus)
+	apiSrv := api.NewAPIServer(s, e, bus, wfe, o)
 	mgr := service.NewServiceManager()
 
 	// Build SkillContext and inject into executor
@@ -157,7 +154,6 @@ func New(config *Config) *Server {
 		selfHeal:       sh,
 		security:       sm,
 		apiServer:      apiSrv,
-		dashboard:      dash,
 		eventBus:       bus,
 		serviceMgr:     mgr,
 		httpServer:     nil,
@@ -184,10 +180,6 @@ func (s *Server) Start() error {
 	// Start worker and watchdog
 	_ = s.executor.StartWorker(s.ctx, "worker-1", "default")
 	s.executor.StartWatchdog(s.ctx)
-
-	// Start dashboard
-	s.dashboard.StartEventListening()
-	s.dashboard.RegisterHandlers()
 
 	addr := fmt.Sprintf(":%d", s.config.Port)
 	fmt.Printf("LoopWorker starting on http://localhost%s\n", addr)

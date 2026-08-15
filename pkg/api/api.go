@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"loopworker/internal/core/executor"
+	"loopworker/internal/core/observer"
 	"loopworker/internal/core/scheduler"
 	"loopworker/pkg/event"
 	"loopworker/pkg/security"
@@ -42,11 +43,12 @@ type APIServer struct {
 	scheduler   *scheduler.Scheduler
 	wfe         *workflow.WorkflowEngine
 	executor    *executor.Executor
+	observer    *observer.Observer
 	eventBus    *event.EventBus
 	rateLimiter *security.RateLimiter
 }
 
-func NewAPIServer(sched *scheduler.Scheduler, exec *executor.Executor, bus *event.EventBus, wfe *workflow.WorkflowEngine) *APIServer {
+func NewAPIServer(sched *scheduler.Scheduler, exec *executor.Executor, bus *event.EventBus, wfe *workflow.WorkflowEngine, obs *observer.Observer) *APIServer {
 	r := chi.NewRouter()
 
 	// Security middlewares
@@ -64,6 +66,7 @@ func NewAPIServer(sched *scheduler.Scheduler, exec *executor.Executor, bus *even
 		scheduler:   sched,
 		wfe:         wfe,
 		executor:    exec,
+		observer:    obs,
 		eventBus:    bus,
 		rateLimiter: security.NewRateLimiter(100, time.Minute),
 	}
@@ -173,6 +176,8 @@ func (s *APIServer) registerRoutes() {
 
 		r.Post("/workflow/execute", s.executeWorkflow)
 		r.Get("/events/live", s.streamEventsLive)
+		r.Get("/metrics", s.getMetrics)
+		r.Get("/logs", s.getLogs)
 
 		r.Route("/tasks", func(r chi.Router) {
 			r.Get("/", s.listTasks)
@@ -239,6 +244,26 @@ func (s *APIServer) healthCheck(w http.ResponseWriter, r *http.Request) {
 		"status": "healthy",
 		"stats":  stats,
 	}, http.StatusOK)
+}
+
+// getMetrics returns observer metrics (replaces retired dashboard /api/metrics).
+func (s *APIServer) getMetrics(w http.ResponseWriter, r *http.Request) {
+	if s.observer == nil {
+		sendError(w, r, fmt.Errorf("observer not available"), http.StatusServiceUnavailable)
+		return
+	}
+	metrics := s.observer.GetMetrics()
+	sendSuccess(w, r, metrics, http.StatusOK)
+}
+
+// getLogs returns observer logs (replaces retired dashboard /api/logs).
+func (s *APIServer) getLogs(w http.ResponseWriter, r *http.Request) {
+	if s.observer == nil {
+		sendError(w, r, fmt.Errorf("observer not available"), http.StatusServiceUnavailable)
+		return
+	}
+	logs := s.observer.GetLogs()
+	sendSuccess(w, r, logs, http.StatusOK)
 }
 
 type CreateTaskRequest struct {

@@ -2,6 +2,7 @@ package observer
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -119,13 +120,16 @@ func TestTaskExecutionEventFlow(t *testing.T) {
 		// EventPluginExecuted requires sandbox execution path,
 		// EventSkillInvoked requires LLM config in skillCtx
 	}
+	var mu sync.Mutex
 
 	for evtType := range expectedEvents {
 		sub := bus.Subscribe(evtType, 10)
 		go func(et event.EventType, s *event.Subscriber) {
 			for evt := range s.Chan() {
 				if evt.Type() == et {
+					mu.Lock()
 					expectedEvents[et] = true
+					mu.Unlock()
 					return
 				}
 			}
@@ -155,6 +159,7 @@ func TestTaskExecutionEventFlow(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
+		mu.Lock()
 		allReceived := true
 		for _, received := range expectedEvents {
 			if !received {
@@ -162,17 +167,20 @@ func TestTaskExecutionEventFlow(t *testing.T) {
 				break
 			}
 		}
+		mu.Unlock()
 		if allReceived {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	mu.Lock()
 	for evtType, received := range expectedEvents {
 		if !received {
 			t.Errorf("event %s never received", evtType)
 		}
 	}
+	mu.Unlock()
 
 	metrics := o.GetMetrics()
 	if len(metrics) == 0 {
