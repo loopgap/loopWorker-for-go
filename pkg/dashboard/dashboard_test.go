@@ -245,5 +245,3 @@ func TestDashboardBroadcastThrottle(t *testing.T) {
 	// Now broadcast should succeed again
 	d.BroadcastUpdate()
 }
-
-

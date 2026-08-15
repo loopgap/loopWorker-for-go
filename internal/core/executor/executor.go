@@ -39,18 +39,18 @@ type Worker struct {
 }
 
 type Executor struct {
-	provider        dispatcher.TaskProvider
-	dispatcher      *dispatcher.Dispatcher
-	sandbox         *sandbox.Sandbox
-	eventBus        *event.EventBus
-	selfHealer      *selfheal.SelfHealer
-	workers         map[string]*Worker
-	mu              sync.RWMutex
-	wg              sync.WaitGroup
-	stats           *ExecutorStats
-	workerFree      chan struct{}
-	llmClient       *ai.LLMClient
-	skillCtx        skill.SkillContext
+	provider          dispatcher.TaskProvider
+	dispatcher        *dispatcher.Dispatcher
+	sandbox           *sandbox.Sandbox
+	eventBus          *event.EventBus
+	selfHealer        *selfheal.SelfHealer
+	workers           map[string]*Worker
+	mu                sync.RWMutex
+	wg                sync.WaitGroup
+	stats             *ExecutorStats
+	workerFree        chan struct{}
+	llmClient         *ai.LLMClient
+	skillCtx          skill.SkillContext
 	llmCircuitBreaker *selfheal.CircuitBreaker
 }
 

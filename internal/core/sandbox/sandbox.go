@@ -278,11 +278,11 @@ func (s *Sandbox) Execute(ctx context.Context, pluginName string, input []byte, 
 
 			if s.eventBus != nil {
 				_ = s.eventBus.Publish(ctx, event.NewEvent(event.EventPluginExecuted, event.PluginExecutedPayload{
-					PluginID:   pluginName,
-					Duration:   elapsed,
-					Success:    false,
-					Error:      res.err.Error(),
-					InputSize:  len(input),
+					PluginID:  pluginName,
+					Duration:  elapsed,
+					Success:   false,
+					Error:     res.err.Error(),
+					InputSize: len(input),
 				}, nil))
 			}
 
@@ -381,8 +381,8 @@ func NewWasmPlugin(ctx context.Context, runtime wazero.Runtime, name, version st
 	}, nil
 }
 
-func (p *WasmPlugin) Name() string    { return p.name }
-func (p *WasmPlugin) Version() string { return p.version }
+func (p *WasmPlugin) Name() string             { return p.name }
+func (p *WasmPlugin) Version() string          { return p.version }
 func (p *WasmPlugin) RequiredSkills() []string { return nil }
 
 func (p *WasmPlugin) Execute(ctx context.Context, input []byte, skillCtx skill.SkillContext) ([]byte, error) {
@@ -414,8 +414,8 @@ type GoPlugin struct {
 }
 
 // NewGoPlugin creates a GoPlugin with the given handler.
-	// The handler receives input as a Reader, output as a Writer, and the skill context.
-	func NewGoPlugin(name, version string, handler func(ctx context.Context, input io.Reader, output io.Writer, skillCtx skill.SkillContext) error) *GoPlugin {
+// The handler receives input as a Reader, output as a Writer, and the skill context.
+func NewGoPlugin(name, version string, handler func(ctx context.Context, input io.Reader, output io.Writer, skillCtx skill.SkillContext) error) *GoPlugin {
 	return &GoPlugin{
 		name:    name,
 		version: version,
@@ -423,8 +423,8 @@ type GoPlugin struct {
 	}
 }
 
-func (p *GoPlugin) Name() string    { return p.name }
-func (p *GoPlugin) Version() string { return p.version }
+func (p *GoPlugin) Name() string             { return p.name }
+func (p *GoPlugin) Version() string          { return p.version }
 func (p *GoPlugin) RequiredSkills() []string { return nil }
 
 func (p *GoPlugin) Execute(ctx context.Context, input []byte, skillCtx skill.SkillContext) ([]byte, error) {
@@ -439,15 +439,15 @@ func (p *GoPlugin) Execute(ctx context.Context, input []byte, skillCtx skill.Ski
 
 // MockPlugin is a simple in-memory plugin for testing.
 type MockPlugin struct {
-	name     string
-	version  string
-	handler  func(ctx context.Context, input []byte, skillCtx skill.SkillContext) ([]byte, error)
-	skills   []string
+	name    string
+	version string
+	handler func(ctx context.Context, input []byte, skillCtx skill.SkillContext) ([]byte, error)
+	skills  []string
 }
 
 // NewMockPlugin creates a MockPlugin with the given handler function.
-	// The handler receives the skill context as its third argument.
-	func NewMockPlugin(name, version string, handler func(ctx context.Context, input []byte, skillCtx skill.SkillContext) ([]byte, error)) *MockPlugin {
+// The handler receives the skill context as its third argument.
+func NewMockPlugin(name, version string, handler func(ctx context.Context, input []byte, skillCtx skill.SkillContext) ([]byte, error)) *MockPlugin {
 	return &MockPlugin{
 		name:    name,
 		version: version,
@@ -465,8 +465,8 @@ func NewMockPluginWithSkills(name, version string, skills []string, handler func
 	}
 }
 
-func (p *MockPlugin) Name() string        { return p.name }
-func (p *MockPlugin) Version() string     { return p.version }
+func (p *MockPlugin) Name() string    { return p.name }
+func (p *MockPlugin) Version() string { return p.version }
 func (p *MockPlugin) RequiredSkills() []string {
 	if p.skills == nil {
 		return nil

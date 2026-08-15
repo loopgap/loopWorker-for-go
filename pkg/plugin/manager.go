@@ -26,12 +26,12 @@ type PluginInfo struct {
 
 // PluginManager manages plugin lifecycle: discovery, loading, unloading.
 type PluginManager struct {
-	sandbox      *sandbox.Sandbox
-	eventBus     *event.EventBus
+	sandbox       *sandbox.Sandbox
+	eventBus      *event.EventBus
 	skillRegistry *skill.SkillRegistry
-	pluginsDir   string
-	loaded       map[string]*PluginInfo
-	mu           sync.RWMutex
+	pluginsDir    string
+	loaded        map[string]*PluginInfo
+	mu            sync.RWMutex
 }
 
 // PluginManagerOption is a functional option for PluginManager.

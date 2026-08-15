@@ -3,15 +3,15 @@ package skill
 import (
 	"context"
 	"errors"
-	"sync"
 	"loopworker/pkg/debugger"
 	"loopworker/pkg/event"
+	"sync"
 )
 
 // SkillDefinition describes a capability that a plugin can declare and consume.
 type SkillDefinition struct {
-	Name        string            // e.g. "llm.chat"
-	Version     string            // e.g. "1.0.0"
+	Name        string // e.g. "llm.chat"
+	Version     string // e.g. "1.0.0"
 	Description string
 	InputTypes  []string          // e.g. ["text", "json"]
 	OutputTypes []string          // e.g. ["text", "json"]
@@ -27,10 +27,10 @@ type SkillProvider interface {
 // SkillContext is the read-only runtime context injected into plugins.
 // All fields may be nil, indicating the capability is not configured.
 type SkillContext struct {
-	LLM      interface{}
-	Bus      *event.EventBus
-	Logger   *debugger.Debugger
-	Config   map[string]interface{}
+	LLM    interface{}
+	Bus    *event.EventBus
+	Logger *debugger.Debugger
+	Config map[string]interface{}
 }
 
 // SkillRegistry manages all registered skills and builds execution contexts.

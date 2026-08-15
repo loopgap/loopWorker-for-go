@@ -1,9 +1,9 @@
 package workflow
 
 import (
-	"fmt"
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"

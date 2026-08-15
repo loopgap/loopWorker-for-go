@@ -22,7 +22,7 @@ type Dashboard struct {
 	mu        sync.RWMutex
 
 	// throttleState tracks the last broadcast time to prevent self-triggering loops
-	throttleMu sync.Mutex
+	throttleMu    sync.Mutex
 	lastBroadcast time.Time
 }
 

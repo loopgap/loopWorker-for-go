@@ -292,8 +292,8 @@ func (o *Observer) handleEvent(evt event.Event) {
 	case event.EventResearchFinding:
 		if payload, ok := evt.Payload().(event.ResearchFindingPayload); ok {
 			o.IncrementCounter("research.findings", map[string]string{
-				"type":     payload.Type,
-				"task_id":  payload.TaskID,
+				"type":    payload.Type,
+				"task_id": payload.TaskID,
 			})
 		} else {
 			o.IncrementCounter("research.findings", nil)

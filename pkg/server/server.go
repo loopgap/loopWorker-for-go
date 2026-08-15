@@ -28,27 +28,27 @@ import (
 )
 
 type Server struct {
-	config       *Config
-	startTime    time.Time
-	scheduler    *scheduler.Scheduler
-	dispatcher   *dispatcher.Dispatcher
-	executor     *executor.Executor
-	sandbox      *sandbox.Sandbox
-	pluginMgr    *plugin.PluginManager
-	observer     *observer.Observer
-	selfHeal     *selfheal.SelfHealer
-	security     *security.SecurityManager
-	apiServer    *api.APIServer
-	dashboard    *dashboard.Dashboard
-	eventBus     *event.EventBus
-	serviceMgr   *service.ServiceManager
-	httpServer   *http.Server
-	skillRegistry *skill.SkillRegistry
+	config         *Config
+	startTime      time.Time
+	scheduler      *scheduler.Scheduler
+	dispatcher     *dispatcher.Dispatcher
+	executor       *executor.Executor
+	sandbox        *sandbox.Sandbox
+	pluginMgr      *plugin.PluginManager
+	observer       *observer.Observer
+	selfHeal       *selfheal.SelfHealer
+	security       *security.SecurityManager
+	apiServer      *api.APIServer
+	dashboard      *dashboard.Dashboard
+	eventBus       *event.EventBus
+	serviceMgr     *service.ServiceManager
+	httpServer     *http.Server
+	skillRegistry  *skill.SkillRegistry
 	workflowEngine *workflow.WorkflowEngine
-	taskBridge   *scheduler.SchedulerBridge
-	mu           sync.RWMutex
-	ctx          context.Context
-	cancel       context.CancelFunc
+	taskBridge     *scheduler.SchedulerBridge
+	mu             sync.RWMutex
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 type Config struct {
@@ -146,25 +146,25 @@ func New(config *Config) *Server {
 	e.SetSkillContext(skillCtx)
 
 	return &Server{
-		config:        config,
-		startTime:     time.Now(),
-		scheduler:     s,
-		dispatcher:    d,
-		executor:      e,
-		sandbox:       sb,
-		pluginMgr:     pm,
-		observer:      o,
-		selfHeal:      sh,
-		security:      sm,
-		apiServer:     apiSrv,
-		dashboard:     dash,
-		eventBus:      bus,
-		serviceMgr:    mgr,
-		httpServer:    nil,
-		skillRegistry: skillRegistry,
+		config:         config,
+		startTime:      time.Now(),
+		scheduler:      s,
+		dispatcher:     d,
+		executor:       e,
+		sandbox:        sb,
+		pluginMgr:      pm,
+		observer:       o,
+		selfHeal:       sh,
+		security:       sm,
+		apiServer:      apiSrv,
+		dashboard:      dash,
+		eventBus:       bus,
+		serviceMgr:     mgr,
+		httpServer:     nil,
+		skillRegistry:  skillRegistry,
 		workflowEngine: wfe,
-		ctx:           ctx,
-		cancel:        cancel,
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 }
 

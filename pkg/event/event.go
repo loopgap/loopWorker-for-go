@@ -9,26 +9,26 @@ import (
 type EventType string
 
 const (
-	EventTaskCreated    EventType = "task.created"
-	EventTaskStarted    EventType = "task.started"
-	EventTaskCompleted  EventType = "task.completed"
-	EventTaskFailed     EventType = "task.failed"
-	EventTaskRetried    EventType = "task.retried"
-	EventTaskCancelled  EventType = "task.cancelled"
-	EventPluginLoaded   EventType = "plugin.loaded"
-	EventPluginUnloaded EventType = "plugin.unloaded"
-	EventWorkerSpawned  EventType = "worker.spawned"
-	EventWorkerExited   EventType = "worker.exited"
-	EventSystemHealth   EventType = "system.health"
-	EventSystemStarted  EventType = "system.started"
-	EventSystemStopped  EventType = "system.stopped"
-	EventPluginExecuted           EventType = "plugin.executed"
-	EventSkillInvoked             EventType = "skill.invoked"
-	EventResearchFinding          EventType = "research.finding"
-	EventWorkflowStepCompleted    EventType = "workflow.step.completed"
-	EventWorkflowStarted          EventType = "workflow.started"
-	EventWorkflowCompleted        EventType = "workflow.completed"
-	EventWorkflowFailed           EventType = "workflow.failed"
+	EventTaskCreated           EventType = "task.created"
+	EventTaskStarted           EventType = "task.started"
+	EventTaskCompleted         EventType = "task.completed"
+	EventTaskFailed            EventType = "task.failed"
+	EventTaskRetried           EventType = "task.retried"
+	EventTaskCancelled         EventType = "task.cancelled"
+	EventPluginLoaded          EventType = "plugin.loaded"
+	EventPluginUnloaded        EventType = "plugin.unloaded"
+	EventWorkerSpawned         EventType = "worker.spawned"
+	EventWorkerExited          EventType = "worker.exited"
+	EventSystemHealth          EventType = "system.health"
+	EventSystemStarted         EventType = "system.started"
+	EventSystemStopped         EventType = "system.stopped"
+	EventPluginExecuted        EventType = "plugin.executed"
+	EventSkillInvoked          EventType = "skill.invoked"
+	EventResearchFinding       EventType = "research.finding"
+	EventWorkflowStepCompleted EventType = "workflow.step.completed"
+	EventWorkflowStarted       EventType = "workflow.started"
+	EventWorkflowCompleted     EventType = "workflow.completed"
+	EventWorkflowFailed        EventType = "workflow.failed"
 )
 
 type Event interface {
@@ -113,7 +113,6 @@ type WorkerExitedPayload struct {
 	ExitCode int
 }
 
-
 type PluginExecutedPayload struct {
 	PluginID   string
 	TaskID     string
@@ -125,11 +124,11 @@ type PluginExecutedPayload struct {
 }
 
 type SkillInvokedPayload struct {
-	SkillName  string
-	TaskID     string
-	Duration   time.Duration
-	Success    bool
-	Error      string
+	SkillName string
+	TaskID    string
+	Duration  time.Duration
+	Success   bool
+	Error     string
 }
 
 type ResearchFindingPayload struct {

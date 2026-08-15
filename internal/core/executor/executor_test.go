@@ -392,7 +392,7 @@ func TestWorkerEvents(t *testing.T) {
 
 func TestExecuteAgentTask(t *testing.T) {
 	mockResponse := `{"choices": [{"message": {"role": "assistant", "content": "{\"summary\": \"Task 1 completed successfully\"}"}}], "usage": {}}`
-	
+
 	var receivedBody string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/chat/completions" {
@@ -412,7 +412,7 @@ func TestExecuteAgentTask(t *testing.T) {
 	s := scheduler.NewScheduler(bus)
 	d := dispatcher.NewDispatcher(s, bus)
 	sb := sandbox.NewSandbox(sandbox.SandboxConfig{})
-	
+
 	llm := ai.NewLLMClient(ts.URL, "mock-api-key")
 	e := NewExecutor(s, d, sb, bus, nil).WithLLMClient(llm)
 
@@ -431,7 +431,7 @@ func TestExecuteAgentTask(t *testing.T) {
 
 	schema := `{"type": "object", "properties": {"summary": {"type": "string"}}}`
 	task2, _ := s.CreateTask(context.Background(), "agent-plugin", nil, []byte("Summarize upstream output"))
-	
+
 	// Set task2 as agent
 	task2.IsAgent = true
 	task2.AgentConfig = &scheduler.AgentConfig{
@@ -441,7 +441,7 @@ func TestExecuteAgentTask(t *testing.T) {
 	}
 
 	s.SaveTask(task2)
-	
+
 	// Save to DB to update columns
 	// Since scheduler has a local SQLite, we can update directly via s.CreateTask/saveTask
 	// We'll queue it next
