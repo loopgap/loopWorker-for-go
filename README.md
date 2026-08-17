@@ -24,99 +24,111 @@ A Go-native, reusable, extensible, efficient, and lightweight work loop engine w
 
 ```bash
 # Build
-go build ./cmd/loopworker/
+make build
 
-# Run TUI mode
-./loopworker -tui
+# Run
+./bin/loopworker
 
-# Run Web mode
-./loopworker -port 19527
+# Run tests
+make test
 
-# Initialize project
-./loopctl init
+# Docker deployment
+make docker
+docker run -p 19527:19527 loopworker:latest
 ```
 
 ### CLI Tools
 
 | Tool | Description |
 |------|-------------|
-| `loopworker` | Main server (Web) |
-| `loopctl` | Task, workflow, and configuration management CLI |
-| `loopbench` | Performance benchmarking tool |
-| `loopwatch` | Real-time monitoring tool (metrics, logs, health) |
-| `loopsim` | Load simulation and stress testing tool |
-| `loopdebug` | Debugging tool (task inspection, tracing, diagnostics) |
+| `loopworker` | Main server |
+| `loopctl` | Task & workflow management CLI |
+| `loopdebug` | Debugging & diagnostics |
+| `loopwatch` | Real-time monitoring |
+| `loopbench` | Performance benchmarking |
+| `loopsim` | Load simulation |
 
 ### Project Structure
 
 ```
 loopWorker-for-go/
 ├── cmd/                    # CLI tools
-│   ├── loopworker/         # Main execution loop server
+│   ├── loopworker/         # Main server
 │   ├── loopctl/            # Task & workflow management CLI
 │   ├── loopbench/          # Performance benchmarking
 │   ├── loopwatch/          # Real-time monitoring
 │   ├── loopsim/            # Load simulation
 │   └── loopdebug/          # Debugging & diagnostics
 ├── pkg/                    # Public packages
+│   ├── api/                # REST API
 │   ├── event/              # Event system
 │   ├── plugin/             # Plugin management
-│   ├── workflow/           # Workflow engine
 │   ├── security/           # Security (bcrypt, RBAC)
-│   ├── api/                # REST API
-│   ├── config/             # Configuration
-│   ├── ui/                 # UI components
-│   └── dashboard/          # Web dashboard
+│   ├── server/             # Server management
+│   ├── skill/              # Skill management
+│   ├── utils/              # Utility functions
+│   └── workflow/           # Workflow engine
 ├── internal/               # Internal core packages
 │   ├── config/             # Config management
-│   └── core/               # Core loop logic
+│   └── core/               # Core logic
 │       ├── scheduler/      # Task scheduler with SQLite persistence
 │       ├── dispatcher/     # Task dispatcher
-│       ├── executor/       # Worker pool and Sandbox orchestration
-│       ├── sandbox/        # WASM sandbox with strict limits
+│       ├── executor/       # Worker pool and LLM client
+│       ├── sandbox/        # WASM sandbox
 │       ├── observer/       # Observability
-│       └── selfheal/       # Self-healing & Watchdog mechanisms
-├── integration/            # Full platform integration tests
-├── test/                   # Benchmark and E2E tests
-├── docs/                   # Documentation
-│   ├── api/                # API reference
-│   └── guides/             # User guides
-├── examples/               # Example workflows and configurations
-└── plugins/                # Plugin directory
+│       └── selfheal/       # Self-healing mechanisms
+├── version/                # Version information
+├── config/                 # Configuration examples
+├── integration/            # Integration tests
+├── examples/               # Example workflows
+└── docs/                   # Documentation
+```
+
+### Building
+
+```bash
+# Build all binaries
+make build
+
+# Run tests
+make test
+
+# Cross-compile for all platforms
+make build-all
+
+# Build Docker image
+make docker
 ```
 
 ### Configuration
 
-```json
-{
-  "general": {
-    "language": "en",
-    "port": 19527,
-    "plugins_dir": "./plugins",
-    "data_dir": "./data"
-  },
-  "appearance": {
-    "theme": "glass",
-    "font_size": 15,
-    "animations": true
-  },
-  "security": {
-    "require_auth": true,
-    "token_expiry": 24
-  }
-}
+```yaml
+# config/config.example.yaml
+server:
+  port: 19527
+  host: "0.0.0.0"
+
+plugins:
+  dir: "~/.loopworker/plugins"
+
+data:
+  dir: "~/.loopworker/data"
 ```
 
 ### API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | /api/tasks | List tasks |
-| POST | /api/tasks | Create task |
-| GET | /api/metrics | Get metrics |
-| GET | /api/logs | Get logs |
-| GET | /api/health | Health check |
-| GET | /events | SSE event stream |
+| GET | /api/v1/health | Health check |
+| GET | /api/v1/tasks | List tasks |
+| POST | /api/v1/tasks | Create task |
+| GET | /api/v1/tasks/:id | Get task |
+| DELETE | /api/v1/tasks/:id | Delete task |
+| GET | /api/v1/workflow/list | List workflows |
+| POST | /api/v1/workflow/execute | Execute workflow |
+| GET | /api/v1/metrics | Get metrics |
+| GET | /api/v1/logs | Get logs |
+| GET | /api/v1/events/live | SSE event stream |
 
 ### License
 
@@ -144,99 +156,95 @@ MIT
 
 ```bash
 # 构建
-go build ./cmd/loopworker/
+make build
 
-# TUI模式运行
-./loopworker -tui
+# 运行
+./bin/loopworker
 
-# Web模式运行
-./loopworker -port 19527
+# 运行测试
+make test
 
-# 初始化项目
-./loopctl init
+# Docker部署
+make docker
+docker run -p 19527:19527 loopworker:latest
 ```
 
 ### 命令行工具
 
 | 工具 | 说明 |
 |------|------|
-| `loopworker` | 主服务（Web） |
-| `loopctl` | 任务、工作流和配置管理CLI |
-| `loopbench` | 性能基准测试工具 |
-| `loopwatch` | 实时监控工具（指标、日志、健康状态） |
-| `loopsim` | 负载模拟和压力测试工具 |
-| `loopdebug` | 调试工具（任务检查、追踪、诊断） |
+| `loopworker` | 主服务器 |
+| `loopctl` | 任务、工作流管理CLI |
+| `loopdebug` | 调试工具 |
+| `loopwatch` | 实时监控工具 |
+| `loopbench` | 性能基准测试 |
+| `loopsim` | 负载模拟 |
 
 ### 项目结构
 
 ```
 loopWorker-for-go/
 ├── cmd/                    # 命令行工具
-│   ├── loopworker/         # 核心主循环服务
-│   ├── loopctl/            # 任务与工作流管理CLI
+│   ├── loopworker/         # 主服务器
+│   ├── loopctl/            # 任务管理CLI
 │   ├── loopbench/          # 性能基准测试
 │   ├── loopwatch/          # 实时监控
 │   ├── loopsim/            # 负载模拟
-│   └── loopdebug/          # 调试与诊断
+│   └── loopdebug/          # 调试工具
 ├── pkg/                    # 公共包
-│   ├── event/              # 事件总线系统
-│   ├── plugin/             # 插件生命周期管理
-│   ├── workflow/           # 工作流引擎
-│   ├── security/           # 认证与授权（bcrypt、RBAC）
-│   ├── api/                # REST API 路由
-│   ├── config/             # 全局配置解析
-│   ├── ui/                 # 终端 UI 组件
-│   └── dashboard/          # Web 可视化仪表板
-├── internal/               # 内部核心包 (不对外暴露)
-│   ├── config/             # 内部配置定义
-│   └── core/               # 核心调度逻辑层
-│       ├── scheduler/      # 任务队列调度器 (支持 SQLite 持久化与死信队列)
-│       ├── dispatcher/     # 无锁事件驱动派发器
-│       ├── executor/       # 工作节点执行器与看门狗
-│       ├── sandbox/        # WASM 沙箱 (支持信号量并发与硬性资源管控)
-│       ├── observer/       # 可观测性与埋点
-│       └── selfheal/       # 自愈与降级机制 (熔断器)
-├── integration/            # 全平台集成测试
-├── test/                   # 性能基准与 E2E 测试
-├── docs/                   # 架构与设计文档
-│   ├── api/                # API 参考文档
-│   └── guides/             # 用户指南
-├── examples/               # 示例工作流与配置模板
-└── plugins/                # 插件目录
+│   ├── api/                # REST API
+│   ├── event/              # 事件系统
+│   ├── plugin/             # 插件管理
+│   ├── security/           # 安全认证
+│   ├── server/             # 服务器管理
+│   ├── skill/              # 技能管理
+│   ├── utils/              # 工具函数
+│   └── workflow/           # 工作流引擎
+├── internal/               # 内部核心包
+│   ├── config/             # 配置管理
+│   └── core/               # 核心逻辑
+│       ├── scheduler/      # 任务调度器
+│       ├── dispatcher/     # 任务分发器
+│       ├── executor/       # 执行器和LLM客户端
+│       ├── sandbox/        # WASM沙箱
+│       ├── observer/       # 可观测性
+│       └── selfheal/       # 自愈机制
+├── version/                # 版本信息
+├── config/                 # 配置示例
+├── integration/            # 集成测试
+├── examples/               # 示例代码
+└── docs/                   # 文档
 ```
 
 ### 配置
 
-```json
-{
-  "general": {
-    "language": "zh",
-    "port": 19527,
-    "plugins_dir": "./plugins",
-    "data_dir": "./data"
-  },
-  "appearance": {
-    "theme": "glass",
-    "font_size": 15,
-    "animations": true
-  },
-  "security": {
-    "require_auth": true,
-    "token_expiry": 24
-  }
-}
+```yaml
+# config/config.example.yaml
+server:
+  port: 19527
+  host: "0.0.0.0"
+
+plugins:
+  dir: "~/.loopworker/plugins"
+
+data:
+  dir: "~/.loopworker/data"
 ```
 
 ### API端点
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | /api/tasks | 获取任务列表 |
-| POST | /api/tasks | 创建任务 |
-| GET | /api/metrics | 获取指标 |
-| GET | /api/logs | 获取日志 |
-| GET | /api/health | 健康检查 |
-| GET | /events | SSE事件流 |
+| GET | /api/v1/health | 健康检查 |
+| GET | /api/v1/tasks | 任务列表 |
+| POST | /api/v1/tasks | 创建任务 |
+| GET | /api/v1/tasks/:id | 获取任务 |
+| DELETE | /api/v1/tasks/:id | 删除任务 |
+| GET | /api/v1/workflow/list | 工作流列表 |
+| POST | /api/v1/workflow/execute | 执行工作流 |
+| GET | /api/v1/metrics | 获取指标 |
+| GET | /api/v1/logs | 获取日志 |
+| GET | /api/v1/events/live | SSE事件流 |
 
 ### 许可证
 
