@@ -20,11 +20,35 @@ import (
 	"loopworker/pkg/event"
 	"loopworker/pkg/plugin"
 	"loopworker/pkg/security"
-	"loopworker/pkg/service"
 	"loopworker/pkg/skill"
 	"loopworker/pkg/utils"
 	"loopworker/pkg/workflow"
 )
+
+// ensureDirectories creates directories if they don't exist.
+func ensureDirectories(dirs ...string) error {
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("create directory %s: %w", dir, err)
+		}
+	}
+	return nil
+}
+
+// ServiceManager manages the server lifecycle.
+type ServiceManager struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func NewServiceManager() *ServiceManager {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &ServiceManager{ctx: ctx, cancel: cancel}
+}
+
+func (m *ServiceManager) StopAll() {
+	m.cancel()
+}
 
 // Components holds all the core components of the LoopWorker server.
 type Components struct {
@@ -38,7 +62,7 @@ type Components struct {
 	Security       *security.SecurityManager
 	APIServer      *api.APIServer
 	EventBus       *event.EventBus
-	ServiceMgr     *service.ServiceManager
+	ServiceMgr     *ServiceManager
 	SkillRegistry  *skill.SkillRegistry
 	WorkflowEngine *workflow.WorkflowEngine
 	TaskBridge     *scheduler.SchedulerBridge
@@ -51,7 +75,7 @@ func BuildComponents(config *Config) (*Components, error) {
 	}
 
 	// Ensure data directory exists
-	if err := service.EnsureDirectories(config.DataDir); err != nil {
+	if err := ensureDirectories(config.DataDir); err != nil {
 		return nil, fmt.Errorf("ensure data directory: %w", err)
 	}
 
@@ -128,7 +152,7 @@ func BuildComponents(config *Config) (*Components, error) {
 	apiSrv := api.NewAPIServer(s, e, bus, wfe, o)
 
 	// Create service manager
-	mgr := service.NewServiceManager()
+	mgr := NewServiceManager()
 
 	// Build skill context and inject into executor
 	skillConfig := map[string]interface{}{}
@@ -215,7 +239,7 @@ func (s *Server) Start() error {
 	}
 
 	// Ensure directories exist
-	if err := service.EnsureDirectories(
+	if err := ensureDirectories(
 		s.config.WorkDir,
 		s.config.PluginsDir,
 		s.config.DataDir,
