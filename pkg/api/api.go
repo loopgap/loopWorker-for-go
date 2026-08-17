@@ -278,6 +278,12 @@ func (req *CreateTaskRequest) Bind(r *http.Request) error {
 	if req.Type == "" {
 		return fmt.Errorf("task type is required")
 	}
+	if len(req.Type) > 255 {
+		return fmt.Errorf("task type too long (max 255 characters)")
+	}
+	if len(req.Input) > 10*1024*1024 { // 10MB limit
+		return fmt.Errorf("task input too large (max 10MB)")
+	}
 	return nil
 }
 
