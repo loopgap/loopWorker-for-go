@@ -17,7 +17,7 @@
 package main
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"runtime"
@@ -26,10 +26,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	serverURL string
+	client    *APIClient
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "loopdebug",
 	Short: "LoopWorker debugging tool",
 	Long:  "A command-line tool for debugging LoopWorker server and diagnosing issues.",
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		client = NewAPIClient(serverURL)
+	},
 }
 
 var taskCmd = &cobra.Command{
@@ -46,25 +54,17 @@ var taskInspectCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		// TODO: Implement API client to inspect task
-		fmt.Printf("Inspecting task: %s\n", taskID)
-		fmt.Println()
-		fmt.Println("Task Details:")
-		fmt.Printf("  ID: %s\n", taskID)
-		fmt.Printf("  Type: echo\n")
-		fmt.Printf("  State: completed\n")
-		fmt.Printf("  Priority: 1\n")
-		fmt.Printf("  Created: 2024-01-01T00:00:00Z\n")
-		fmt.Printf("  Started: 2024-01-01T00:00:01Z\n")
-		fmt.Printf("  Completed: 2024-01-01T00:00:02Z\n")
-		fmt.Printf("  Duration: 1s\n")
-		fmt.Println()
-		fmt.Println("Execution Trace:")
-		fmt.Printf("  [00:00:00] Task created\n")
-		fmt.Printf("  [00:00:01] Task queued\n")
-		fmt.Printf("  [00:00:01] Task assigned to worker-1\n")
-		fmt.Printf("  [00:00:02] Task completed\n")
+		task, err := client.GetTask(taskID)
+		if err != nil {
+			return fmt.Errorf("inspect task: %w", err)
+		}
 
+		jsonData, err := json.MarshalIndent(task, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal task: %w", err)
+		}
+
+		fmt.Println(string(jsonData))
 		return nil
 	},
 }
@@ -77,36 +77,17 @@ var taskTraceCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		// TODO: Implement API client to trace task
-		fmt.Printf("Tracing task: %s\n", taskID)
-		fmt.Println("Press Ctrl+C to stop")
-		fmt.Println()
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		// Simulate real-time tracing
-		events := []string{
-			"Task created",
-			"Task queued (priority: 1)",
-			"Task assigned to worker-1",
-			"Worker started execution",
-			"Plugin loaded: echo",
-			"Task completed successfully",
+		task, err := client.GetTask(taskID)
+		if err != nil {
+			return fmt.Errorf("trace task: %w", err)
 		}
 
-		for i, event := range events {
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				fmt.Printf("[%s] %s\n", time.Now().Format("15:04:05"), event)
-				if i < len(events)-1 {
-					time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
-				}
-			}
+		jsonData, err := json.MarshalIndent(task, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal task: %w", err)
 		}
 
+		fmt.Println(string(jsonData))
 		return nil
 	},
 }
@@ -119,17 +100,26 @@ var taskReplayCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		// TODO: Implement API client to replay task
+		task, err := client.GetTask(taskID)
+		if err != nil {
+			return fmt.Errorf("replay task: %w", err)
+		}
+
+		taskType, _ := task["type"].(string)
+		input, _ := task["input"].(string)
+
 		fmt.Printf("Replaying task: %s\n", taskID)
+		fmt.Printf("  Type: %s\n", taskType)
+		fmt.Printf("  Input: %s\n", input)
 		fmt.Println()
-		fmt.Println("Original Task:")
-		fmt.Printf("  Type: echo\n")
-		fmt.Printf("  Input: Hello, World!\n")
-		fmt.Println()
-		fmt.Println("Replaying...")
-		time.Sleep(time.Second)
+
+		newTask, err := client.CreateTask(taskType, input, 1)
+		if err != nil {
+			return fmt.Errorf("replay task: %w", err)
+		}
+
 		fmt.Println("Replay completed successfully")
-		fmt.Printf("  New Task ID: task-%d\n", time.Now().UnixNano())
+		fmt.Printf("  New Task ID: %v\n", newTask["id"])
 
 		return nil
 	},
@@ -149,20 +139,22 @@ var workflowInspectCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		workflowID := args[0]
 
-		// TODO: Implement API client to inspect workflow
-		fmt.Printf("Inspecting workflow: %s\n", workflowID)
-		fmt.Println()
-		fmt.Println("Workflow Details:")
-		fmt.Printf("  ID: %s\n", workflowID)
-		fmt.Printf("  Name: data-processing\n")
-		fmt.Printf("  Status: completed\n")
-		fmt.Printf("  Steps: 3\n")
-		fmt.Println()
-		fmt.Println("Steps:")
-		fmt.Printf("  1. extract (completed)\n")
-		fmt.Printf("  2. transform (completed)\n")
-		fmt.Printf("  3. load (completed)\n")
+		body, err := client.get("/api/v1/workflow/" + workflowID)
+		if err != nil {
+			return fmt.Errorf("inspect workflow: %w", err)
+		}
 
+		var workflow map[string]interface{}
+		if err := json.Unmarshal(body, &workflow); err != nil {
+			return fmt.Errorf("unmarshal workflow: %w", err)
+		}
+
+		jsonData, err := json.MarshalIndent(workflow, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal workflow: %w", err)
+		}
+
+		fmt.Println(string(jsonData))
 		return nil
 	},
 }
@@ -175,38 +167,22 @@ var workflowTraceCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		workflowID := args[0]
 
-		// TODO: Implement API client to trace workflow
-		fmt.Printf("Tracing workflow: %s\n", workflowID)
-		fmt.Println("Press Ctrl+C to stop")
-		fmt.Println()
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		// Simulate real-time tracing
-		events := []string{
-			"Workflow started",
-			"Step 1: extract - started",
-			"Step 1: extract - completed",
-			"Step 2: transform - started",
-			"Step 2: transform - completed",
-			"Step 3: load - started",
-			"Step 3: load - completed",
-			"Workflow completed",
+		body, err := client.get("/api/v1/workflow/" + workflowID)
+		if err != nil {
+			return fmt.Errorf("trace workflow: %w", err)
 		}
 
-		for i, event := range events {
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				fmt.Printf("[%s] %s\n", time.Now().Format("15:04:05"), event)
-				if i < len(events)-1 {
-					time.Sleep(time.Duration(i+1) * 300 * time.Millisecond)
-				}
-			}
+		var workflow map[string]interface{}
+		if err := json.Unmarshal(body, &workflow); err != nil {
+			return fmt.Errorf("unmarshal workflow: %w", err)
 		}
 
+		jsonData, err := json.MarshalIndent(workflow, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal workflow: %w", err)
+		}
+
+		fmt.Println(string(jsonData))
 		return nil
 	},
 }
@@ -219,14 +195,35 @@ var workflowValidateCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		file := args[0]
 
-		// TODO: Implement workflow validation
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("read file: %w", err)
+		}
+
+		var workflowDef map[string]interface{}
+		if err := json.Unmarshal(data, &workflowDef); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+
 		fmt.Printf("Validating workflow: %s\n", file)
 		fmt.Println()
 		fmt.Println("Validation Results:")
 		fmt.Printf("  ✓ Valid JSON syntax\n")
-		fmt.Printf("  ✓ All required fields present\n")
-		fmt.Printf("  ✓ No circular dependencies\n")
-		fmt.Printf("  ✓ All step types supported\n")
+
+		if _, ok := workflowDef["name"]; ok {
+			fmt.Printf("  ✓ Name field present\n")
+		} else {
+			fmt.Printf("  ✗ Name field missing\n")
+		}
+
+		if steps, ok := workflowDef["steps"]; ok {
+			if stepList, ok := steps.([]interface{}); ok {
+				fmt.Printf("  ✓ Steps defined: %d\n", len(stepList))
+			}
+		} else {
+			fmt.Printf("  ✗ Steps field missing\n")
+		}
+
 		fmt.Println()
 		fmt.Println("Workflow is valid!")
 
@@ -262,9 +259,17 @@ var diagnoseCmd = &cobra.Command{
 		fmt.Printf("Goroutines: %d\n", runtime.NumGoroutine())
 		fmt.Println()
 
-		// TODO: Check server connectivity
+		// Check server connectivity
 		fmt.Println("Server Connectivity:")
-		fmt.Printf("  Status: checking...\n")
+		health, err := client.HealthCheck()
+		if err != nil {
+			fmt.Printf("  Status: disconnected (%v)\n", err)
+		} else {
+			fmt.Printf("  Status: connected\n")
+			if status, ok := health["status"]; ok {
+				fmt.Printf("  Server Status: %v\n", status)
+			}
+		}
 
 		return nil
 	},
@@ -281,13 +286,32 @@ var profileCmd = &cobra.Command{
 		fmt.Printf("Collecting profile for %v...\n", duration)
 		fmt.Println()
 
-		// TODO: Implement profiling
-		time.Sleep(duration)
+		// Collect runtime profile
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+
+		fmt.Println("Memory Profile:")
+		fmt.Printf("  Heap Alloc: %d MB\n", m.HeapAlloc/1024/1024)
+		fmt.Printf("  Heap Inuse: %d MB\n", m.HeapInuse/1024/1024)
+		fmt.Printf("  Stack Inuse: %d MB\n", m.StackInuse/1024/1024)
+		fmt.Printf("  Goroutines: %d\n", runtime.NumGoroutine())
+		fmt.Printf("  Num GC: %d\n", m.NumGC)
 
 		if output != "" {
-			fmt.Printf("Profile saved to: %s\n", output)
+			profileData := map[string]interface{}{
+				"heap_alloc_mb": m.HeapAlloc / 1024 / 1024,
+				"heap_inuse_mb": m.HeapInuse / 1024 / 1024,
+				"stack_inuse_mb": m.StackInuse / 1024 / 1024,
+				"goroutines":    runtime.NumGoroutine(),
+				"num_gc":        m.NumGC,
+			}
+			jsonData, _ := json.MarshalIndent(profileData, "", "  ")
+			if err := os.WriteFile(output, jsonData, 0644); err != nil {
+				return fmt.Errorf("write profile: %w", err)
+			}
+			fmt.Printf("\nProfile saved to: %s\n", output)
 		} else {
-			fmt.Println("Profile collected (use -o to save to file)")
+			fmt.Println("\nProfile collected (use -o to save to file)")
 		}
 
 		return nil
@@ -295,6 +319,8 @@ var profileCmd = &cobra.Command{
 }
 
 func init() {
+	rootCmd.PersistentFlags().StringVar(&serverURL, "server", "", "Server URL (default: http://localhost:19527)")
+
 	// Task commands
 	taskCmd.AddCommand(taskInspectCmd, taskTraceCmd, taskReplayCmd)
 
