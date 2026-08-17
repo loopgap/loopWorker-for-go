@@ -26,14 +26,14 @@ import (
 )
 
 type Metrics struct {
-	TasksCreated    int64   `json:"tasks_created"`
-	TasksCompleted  int64   `json:"tasks_completed"`
-	TasksFailed     int64   `json:"tasks_failed"`
-	ActiveWorkers   int     `json:"active_workers"`
-	IdleWorkers     int     `json:"idle_workers"`
-	QueueSize       int     `json:"queue_size"`
-	AvgExecTime     string  `json:"avg_exec_time"`
-	TasksPerSecond  float64 `json:"tasks_per_second"`
+	TasksCreated   int64   `json:"tasks_created"`
+	TasksCompleted int64   `json:"tasks_completed"`
+	TasksFailed    int64   `json:"tasks_failed"`
+	ActiveWorkers  int     `json:"active_workers"`
+	IdleWorkers    int     `json:"idle_workers"`
+	QueueSize      int     `json:"queue_size"`
+	AvgExecTime    string  `json:"avg_exec_time"`
+	TasksPerSecond float64 `json:"tasks_per_second"`
 }
 
 type HealthStatus struct {

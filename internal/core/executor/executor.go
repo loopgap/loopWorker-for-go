@@ -81,15 +81,15 @@ type ExecutorStats struct {
 
 func NewExecutor(provider dispatcher.TaskProvider, disp *dispatcher.Dispatcher, sandbox *sandbox.Sandbox, eventBus *event.EventBus, healer *selfheal.SelfHealer, opts ...ExecutorOption) *Executor {
 	e := &Executor{
-		provider:   provider,
-		dispatcher: disp,
-		sandbox:    sandbox,
-		eventBus:   eventBus,
-		selfHealer: healer,
-		workers:    make(map[string]*Worker),
-		stats:      &ExecutorStats{},
-		workerFree: make(chan struct{}, 1000), // Buffer to avoid blocking
-		taskTimeout: 30 * time.Minute,        // 默认30分钟超时
+		provider:    provider,
+		dispatcher:  disp,
+		sandbox:     sandbox,
+		eventBus:    eventBus,
+		selfHealer:  healer,
+		workers:     make(map[string]*Worker),
+		stats:       &ExecutorStats{},
+		workerFree:  make(chan struct{}, 1000), // Buffer to avoid blocking
+		taskTimeout: 30 * time.Minute,          // 默认30分钟超时
 	}
 
 	// 应用函数选项
