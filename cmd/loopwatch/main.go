@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	lwclient "loopworker/pkg/client"
 )
 
 type Metrics struct {
@@ -111,7 +113,7 @@ var rootCmd = &cobra.Command{
 }
 
 func showHealthStatus(server string) error {
-	c := NewAPIClient(server)
+	c := lwclient.NewAPIClient(server)
 	health, err := c.HealthCheck()
 	if err != nil {
 		return fmt.Errorf("get health: %w", err)
@@ -135,7 +137,7 @@ func showHealthStatus(server string) error {
 }
 
 func showMetricsData(server string) error {
-	c := NewAPIClient(server)
+	c := lwclient.NewAPIClient(server)
 	metrics, err := c.GetMetrics()
 	if err != nil {
 		return fmt.Errorf("get metrics: %w", err)
@@ -150,7 +152,7 @@ func showMetricsData(server string) error {
 }
 
 func showLogsData(server string) error {
-	c := NewAPIClient(server)
+	c := lwclient.NewAPIClient(server)
 	logs, err := c.GetLogs()
 	if err != nil {
 		return fmt.Errorf("get logs: %w", err)

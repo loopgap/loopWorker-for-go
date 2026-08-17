@@ -1,4 +1,4 @@
-package main
+package client
 
 import (
 	"bytes"
@@ -38,7 +38,7 @@ func NewAPIClient(baseURL string) *APIClient {
 }
 
 // get performs a GET request.
-func (c *APIClient) get(path string) ([]byte, error) {
+func (c *APIClient) Get(path string) ([]byte, error) {
 	resp, err := c.HTTPClient.Get(c.BaseURL + path)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -58,7 +58,7 @@ func (c *APIClient) get(path string) ([]byte, error) {
 }
 
 // post performs a POST request.
-func (c *APIClient) post(path string, data interface{}) ([]byte, error) {
+func (c *APIClient) Post(path string, data interface{}) ([]byte, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -83,7 +83,7 @@ func (c *APIClient) post(path string, data interface{}) ([]byte, error) {
 }
 
 // delete performs a DELETE request.
-func (c *APIClient) delete(path string) ([]byte, error) {
+func (c *APIClient) Delete(path string) ([]byte, error) {
 	req, err := http.NewRequest("DELETE", c.BaseURL+path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -109,7 +109,7 @@ func (c *APIClient) delete(path string) ([]byte, error) {
 
 // HealthCheck checks server health.
 func (c *APIClient) HealthCheck() (map[string]interface{}, error) {
-	body, err := c.get("/api/v1/health")
+	body, err := c.Get("/api/v1/health")
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +132,7 @@ func (c *APIClient) ListTasks(state, taskType string, limit int) ([]map[string]i
 		path += "&type=" + taskType
 	}
 
-	body, err := c.get(path)
+	body, err := c.Get(path)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (c *APIClient) ListTasks(state, taskType string, limit int) ([]map[string]i
 
 // GetTask gets a specific task.
 func (c *APIClient) GetTask(taskID string) (map[string]interface{}, error) {
-	body, err := c.get("/api/v1/tasks/" + taskID)
+	body, err := c.Get("/api/v1/tasks/" + taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +168,7 @@ func (c *APIClient) CreateTask(taskType, input string, priority int) (map[string
 		"priority": priority,
 	}
 
-	body, err := c.post("/api/v1/tasks", data)
+	body, err := c.Post("/api/v1/tasks", data)
 	if err != nil {
 		return nil, err
 	}
@@ -183,13 +183,13 @@ func (c *APIClient) CreateTask(taskType, input string, priority int) (map[string
 
 // DeleteTask deletes a task.
 func (c *APIClient) DeleteTask(taskID string) error {
-	_, err := c.delete("/api/v1/tasks/" + taskID)
+	_, err := c.Delete("/api/v1/tasks/" + taskID)
 	return err
 }
 
 // ListWorkflows lists all workflows.
 func (c *APIClient) ListWorkflows() ([]map[string]interface{}, error) {
-	body, err := c.get("/api/v1/workflow/list")
+	body, err := c.Get("/api/v1/workflow/list")
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +209,7 @@ func (c *APIClient) ExecuteWorkflow(workflowID string, input interface{}) (map[s
 		"input":       input,
 	}
 
-	body, err := c.post("/api/v1/workflow/execute", data)
+	body, err := c.Post("/api/v1/workflow/execute", data)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +224,7 @@ func (c *APIClient) ExecuteWorkflow(workflowID string, input interface{}) (map[s
 
 // GetMetrics gets server metrics.
 func (c *APIClient) GetMetrics() (map[string]interface{}, error) {
-	body, err := c.get("/api/v1/metrics")
+	body, err := c.Get("/api/v1/metrics")
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +239,7 @@ func (c *APIClient) GetMetrics() (map[string]interface{}, error) {
 
 // GetLogs gets server logs.
 func (c *APIClient) GetLogs() ([]map[string]interface{}, error) {
-	body, err := c.get("/api/v1/logs")
+	body, err := c.Get("/api/v1/logs")
 	if err != nil {
 		return nil, err
 	}

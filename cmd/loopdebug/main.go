@@ -24,11 +24,13 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	lwclient "loopworker/pkg/client"
 )
 
 var (
 	serverURL string
-	client    *APIClient
+	apiClient *lwclient.APIClient
 )
 
 var rootCmd = &cobra.Command{
@@ -36,7 +38,7 @@ var rootCmd = &cobra.Command{
 	Short: "LoopWorker debugging tool",
 	Long:  "A command-line tool for debugging LoopWorker server and diagnosing issues.",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		client = NewAPIClient(serverURL)
+		apiClient = lwclient.NewAPIClient(serverURL)
 	},
 }
 
@@ -54,7 +56,7 @@ var taskInspectCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		task, err := client.GetTask(taskID)
+		task, err := apiClient.GetTask(taskID)
 		if err != nil {
 			return fmt.Errorf("inspect task: %w", err)
 		}
@@ -77,7 +79,7 @@ var taskTraceCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		task, err := client.GetTask(taskID)
+		task, err := apiClient.GetTask(taskID)
 		if err != nil {
 			return fmt.Errorf("trace task: %w", err)
 		}
@@ -100,7 +102,7 @@ var taskReplayCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		task, err := client.GetTask(taskID)
+		task, err := apiClient.GetTask(taskID)
 		if err != nil {
 			return fmt.Errorf("replay task: %w", err)
 		}
@@ -113,7 +115,7 @@ var taskReplayCmd = &cobra.Command{
 		fmt.Printf("  Input: %s\n", input)
 		fmt.Println()
 
-		newTask, err := client.CreateTask(taskType, input, 1)
+		newTask, err := apiClient.CreateTask(taskType, input, 1)
 		if err != nil {
 			return fmt.Errorf("replay task: %w", err)
 		}
@@ -139,7 +141,7 @@ var workflowInspectCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		workflowID := args[0]
 
-		body, err := client.get("/api/v1/workflow/" + workflowID)
+		body, err := apiClient.Get("/api/v1/workflow/" + workflowID)
 		if err != nil {
 			return fmt.Errorf("inspect workflow: %w", err)
 		}
@@ -167,7 +169,7 @@ var workflowTraceCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		workflowID := args[0]
 
-		body, err := client.get("/api/v1/workflow/" + workflowID)
+		body, err := apiClient.Get("/api/v1/workflow/" + workflowID)
 		if err != nil {
 			return fmt.Errorf("trace workflow: %w", err)
 		}
@@ -261,7 +263,7 @@ var diagnoseCmd = &cobra.Command{
 
 		// Check server connectivity
 		fmt.Println("Server Connectivity:")
-		health, err := client.HealthCheck()
+		health, err := apiClient.HealthCheck()
 		if err != nil {
 			fmt.Printf("  Status: disconnected (%v)\n", err)
 		} else {

@@ -24,11 +24,13 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	lwclient "loopworker/pkg/client"
 )
 
 var (
 	serverURL string
-	client    *APIClient
+	apiClient *lwclient.APIClient
 )
 
 var rootCmd = &cobra.Command{
@@ -36,7 +38,7 @@ var rootCmd = &cobra.Command{
 	Short: "LoopWorker control CLI",
 	Long:  "A command-line tool for managing LoopWorker server, tasks, workflows, and configuration.",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		client = NewAPIClient(serverURL)
+		apiClient = lwclient.NewAPIClient(serverURL)
 	},
 }
 
@@ -55,7 +57,7 @@ var taskListCmd = &cobra.Command{
 		taskType, _ := cmd.Flags().GetString("type")
 		limit, _ := cmd.Flags().GetInt("limit")
 
-		tasks, err := client.ListTasks(state, taskType, limit)
+		tasks, err := apiClient.ListTasks(state, taskType, limit)
 		if err != nil {
 			return fmt.Errorf("list tasks: %w", err)
 		}
@@ -79,7 +81,7 @@ var taskCreateCmd = &cobra.Command{
 		input, _ := cmd.Flags().GetString("input")
 		priority, _ := cmd.Flags().GetInt("priority")
 
-		task, err := client.CreateTask(taskType, input, priority)
+		task, err := apiClient.CreateTask(taskType, input, priority)
 		if err != nil {
 			return fmt.Errorf("create task: %w", err)
 		}
@@ -102,7 +104,7 @@ var taskGetCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		task, err := client.GetTask(taskID)
+		task, err := apiClient.GetTask(taskID)
 		if err != nil {
 			return fmt.Errorf("get task: %w", err)
 		}
@@ -125,7 +127,7 @@ var taskCancelCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		_, err := client.post("/api/v1/tasks/"+taskID+"/cancel", nil)
+		_, err := apiClient.Post("/api/v1/tasks/"+taskID+"/cancel", nil)
 		if err != nil {
 			return fmt.Errorf("cancel task: %w", err)
 		}
@@ -143,7 +145,7 @@ var taskDeleteCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		if err := client.DeleteTask(taskID); err != nil {
+		if err := apiClient.DeleteTask(taskID); err != nil {
 			return fmt.Errorf("delete task: %w", err)
 		}
 
@@ -163,7 +165,7 @@ var workflowListCmd = &cobra.Command{
 	Short: "List workflows",
 	Long:  "List all workflows.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		workflows, err := client.ListWorkflows()
+		workflows, err := apiClient.ListWorkflows()
 		if err != nil {
 			return fmt.Errorf("list workflows: %w", err)
 		}
@@ -195,7 +197,7 @@ var workflowCreateCmd = &cobra.Command{
 			return fmt.Errorf("parse workflow definition: %w", err)
 		}
 
-		_, err = client.post("/api/v1/workflow", workflowDef)
+		_, err = apiClient.Post("/api/v1/workflow", workflowDef)
 		if err != nil {
 			return fmt.Errorf("create workflow: %w", err)
 		}
@@ -221,7 +223,7 @@ var workflowExecuteCmd = &cobra.Command{
 			}
 		}
 
-		result, err := client.ExecuteWorkflow(workflowID, inputData)
+		result, err := apiClient.ExecuteWorkflow(workflowID, inputData)
 		if err != nil {
 			return fmt.Errorf("execute workflow: %w", err)
 		}
@@ -247,7 +249,7 @@ var configShowCmd = &cobra.Command{
 	Short: "Show current configuration",
 	Long:  "Display the current LoopWorker configuration.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		body, err := client.get("/api/v1/config")
+		body, err := apiClient.Get("/api/v1/config")
 		if err != nil {
 			fmt.Println("Current configuration:")
 			fmt.Println("  Port: 19527")
@@ -282,7 +284,7 @@ var configSetCmd = &cobra.Command{
 
 		data := map[string]interface{}{key: value}
 
-		_, err := client.post("/api/v1/config", data)
+		_, err := apiClient.Post("/api/v1/config", data)
 		if err != nil {
 			return fmt.Errorf("set config: %w", err)
 		}
@@ -297,7 +299,7 @@ var statusCmd = &cobra.Command{
 	Short: "Show server status",
 	Long:  "Display the current status of the LoopWorker server.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		health, err := client.HealthCheck()
+		health, err := apiClient.HealthCheck()
 		if err != nil {
 			return fmt.Errorf("server not reachable: %w", err)
 		}
@@ -317,7 +319,7 @@ var metricsCmd = &cobra.Command{
 	Short: "Show server metrics",
 	Long:  "Display the current metrics of the LoopWorker server.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		metrics, err := client.GetMetrics()
+		metrics, err := apiClient.GetMetrics()
 		if err != nil {
 			return fmt.Errorf("get metrics: %w", err)
 		}
@@ -337,7 +339,7 @@ var logsCmd = &cobra.Command{
 	Short: "Show server logs",
 	Long:  "Display recent logs from the LoopWorker server.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		logs, err := client.GetLogs()
+		logs, err := apiClient.GetLogs()
 		if err != nil {
 			return fmt.Errorf("get logs: %w", err)
 		}
