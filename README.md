@@ -39,14 +39,14 @@ docker run -p 19527:19527 loopworker:latest
 
 ### CLI Tools
 
-| Tool | Description |
-|------|-------------|
-| `loopworker` | Main server |
-| `loopctl` | Task & workflow management CLI |
-| `loopdebug` | Debugging & diagnostics |
-| `loopwatch` | Real-time monitoring |
-| `loopbench` | Performance benchmarking |
-| `loopsim` | Load simulation |
+| Tool | Description | Version |
+|------|-------------|---------|
+| `loopworker` | Main server | `loopworker version` |
+| `loopctl` | Task & workflow management CLI | `loopctl version` |
+| `loopdebug` | Debugging & diagnostics | `loopdebug version` |
+| `loopwatch` | Real-time monitoring | `loopwatch version` |
+| `loopbench` | Performance benchmarking | `loopbench version` |
+| `loopsim` | Load simulation | `loopsim version` |
 
 ### Project Structure
 
@@ -171,14 +171,14 @@ docker run -p 19527:19527 loopworker:latest
 
 ### 命令行工具
 
-| 工具 | 说明 |
-|------|------|
-| `loopworker` | 主服务器 |
-| `loopctl` | 任务、工作流管理CLI |
-| `loopdebug` | 调试工具 |
-| `loopwatch` | 实时监控工具 |
-| `loopbench` | 性能基准测试 |
-| `loopsim` | 负载模拟 |
+| 工具 | 说明 | 版本 |
+|------|------|------|
+| `loopworker` | 主服务器 | `loopworker version` |
+| `loopctl` | 任务、工作流管理CLI | `loopctl version` |
+| `loopdebug` | 调试工具 | `loopdebug version` |
+| `loopwatch` | 实时监控工具 | `loopwatch version` |
+| `loopbench` | 性能基准测试 | `loopbench version` |
+| `loopsim` | 负载模拟 | `loopsim version` |
 
 ### 项目结构
 
