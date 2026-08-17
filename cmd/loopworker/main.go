@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"loopworker/internal/config"
 	"loopworker/pkg/server"
 	"loopworker/pkg/utils"
 )
@@ -20,17 +21,20 @@ var rootCmd = &cobra.Command{
 	Use:   "loopworker",
 	Short: "LoopWorker is an industrial-grade WASM workflow engine",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Initialize Config from Viper
-		cfg := &server.Config{
-			Port:       viper.GetInt("port"),
-			PluginsDir: viper.GetString("plugins_dir"),
-			DataDir:    viper.GetString("data_dir"),
-			WorkDir:    viper.GetString("work_dir"),
-			Language:   viper.GetString("language"),
-			Theme:      viper.GetString("theme"),
+		// Load configuration
+		cfg, err := config.LoadConfig(cfgFile)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
 		}
 
-		srv := server.New(cfg)
+		// Create server config from internal config
+		serverCfg := &server.Config{
+			Port:       cfg.Port,
+			PluginsDir: cfg.PluginsDir,
+			DataDir:    cfg.DataDir,
+		}
+
+		srv := server.New(serverCfg)
 		fmt.Printf("Starting LoopWorker on port %d...\n", cfg.Port)
 
 		errCh := make(chan error, 1)
