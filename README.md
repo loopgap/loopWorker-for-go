@@ -41,18 +41,28 @@ go build ./cmd/loopworker/
 | Tool | Description |
 |------|-------------|
 | `loopworker` | Main server (Web) |
+| `loopctl` | Task, workflow, and configuration management CLI |
+| `loopbench` | Performance benchmarking tool |
+| `loopwatch` | Real-time monitoring tool (metrics, logs, health) |
+| `loopsim` | Load simulation and stress testing tool |
+| `loopdebug` | Debugging tool (task inspection, tracing, diagnostics) |
 
 ### Project Structure
 
 ```
 loopWorker-for-go/
 ├── cmd/                    # CLI tools
-│   └── loopworker/         # Main execution loop server
+│   ├── loopworker/         # Main execution loop server
+│   ├── loopctl/            # Task & workflow management CLI
+│   ├── loopbench/          # Performance benchmarking
+│   ├── loopwatch/          # Real-time monitoring
+│   ├── loopsim/            # Load simulation
+│   └── loopdebug/          # Debugging & diagnostics
 ├── pkg/                    # Public packages
 │   ├── event/              # Event system
 │   ├── plugin/             # Plugin management
 │   ├── workflow/           # Workflow engine
-│   ├── security/           # Security
+│   ├── security/           # Security (bcrypt, RBAC)
 │   ├── api/                # REST API
 │   ├── config/             # Configuration
 │   ├── ui/                 # UI components
@@ -69,6 +79,8 @@ loopWorker-for-go/
 ├── integration/            # Full platform integration tests
 ├── test/                   # Benchmark and E2E tests
 ├── docs/                   # Documentation
+│   ├── api/                # API reference
+│   └── guides/             # User guides
 ├── examples/               # Example workflows and configurations
 └── plugins/                # Plugin directory
 ```
@@ -149,18 +161,28 @@ go build ./cmd/loopworker/
 | 工具 | 说明 |
 |------|------|
 | `loopworker` | 主服务（Web） |
+| `loopctl` | 任务、工作流和配置管理CLI |
+| `loopbench` | 性能基准测试工具 |
+| `loopwatch` | 实时监控工具（指标、日志、健康状态） |
+| `loopsim` | 负载模拟和压力测试工具 |
+| `loopdebug` | 调试工具（任务检查、追踪、诊断） |
 
 ### 项目结构
 
 ```
 loopWorker-for-go/
 ├── cmd/                    # 命令行工具
-│   └── loopworker/         # 核心主循环服务
+│   ├── loopworker/         # 核心主循环服务
+│   ├── loopctl/            # 任务与工作流管理CLI
+│   ├── loopbench/          # 性能基准测试
+│   ├── loopwatch/          # 实时监控
+│   ├── loopsim/            # 负载模拟
+│   └── loopdebug/          # 调试与诊断
 ├── pkg/                    # 公共包
 │   ├── event/              # 事件总线系统
 │   ├── plugin/             # 插件生命周期管理
 │   ├── workflow/           # 工作流引擎
-│   ├── security/           # 认证与授权
+│   ├── security/           # 认证与授权（bcrypt、RBAC）
 │   ├── api/                # REST API 路由
 │   ├── config/             # 全局配置解析
 │   ├── ui/                 # 终端 UI 组件
@@ -177,6 +199,8 @@ loopWorker-for-go/
 ├── integration/            # 全平台集成测试
 ├── test/                   # 性能基准与 E2E 测试
 ├── docs/                   # 架构与设计文档
+│   ├── api/                # API 参考文档
+│   └── guides/             # 用户指南
 ├── examples/               # 示例工作流与配置模板
 └── plugins/                # 插件目录
 ```
