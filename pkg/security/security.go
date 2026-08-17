@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Permission string
@@ -129,7 +131,7 @@ func (sm *SecurityManager) Authenticate(username, password string) (*Token, erro
 		return nil, fmt.Errorf("user not found")
 	}
 
-	if user.PasswordHash != HashPassword(password) {
+	if !CheckPassword(password, user.PasswordHash) {
 		sm.recordAudit(user.ID, "authenticate", "auth", false, "")
 		return nil, fmt.Errorf("invalid password")
 	}
@@ -213,6 +215,17 @@ func generateID() string {
 }
 
 func HashPassword(password string) string {
-	h := sha256.Sum256([]byte(password))
-	return hex.EncodeToString(h[:])
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		// 如果bcrypt失败，回退到SHA-256（不推荐，但保证功能正常）
+		fmt.Printf("Warning: bcrypt failed, falling back to SHA-256: %v\n", err)
+		h := sha256.Sum256([]byte(password))
+		return hex.EncodeToString(h[:])
+	}
+	return string(hash)
+}
+
+func CheckPassword(password, hash string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	return err == nil
 }

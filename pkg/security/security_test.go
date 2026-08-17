@@ -143,12 +143,18 @@ func TestPasswordHash(t *testing.T) {
 	hash1 := HashPassword("password")
 	hash2 := HashPassword("password")
 
-	if hash1 != hash2 {
-		t.Error("same password should produce same hash")
+	// bcrypt每次生成的哈希都不同（因为有随机盐）
+	// 但都应该能正确验证原始密码
+	if !CheckPassword("password", hash1) {
+		t.Error("hash1 should validate password")
 	}
 
-	if hash1 == HashPassword("different") {
-		t.Error("different passwords should produce different hashes")
+	if !CheckPassword("password", hash2) {
+		t.Error("hash2 should validate password")
+	}
+
+	if CheckPassword("different", hash1) {
+		t.Error("hash1 should not validate different password")
 	}
 }
 
