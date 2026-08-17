@@ -12,7 +12,9 @@ import (
 	"loopworker/internal/core/scheduler"
 	"loopworker/internal/core/selfheal"
 	"loopworker/pkg/event"
+	"loopworker/pkg/logger"
 	"loopworker/pkg/skill"
+	"go.uber.org/zap"
 	"loopworker/pkg/utils"
 )
 
@@ -52,6 +54,7 @@ type Executor struct {
 	skillCtx          skill.SkillContext
 	llmCircuitBreaker *selfheal.CircuitBreaker
 	taskTimeout       time.Duration // 全局任务执行超时
+	logger            *zap.Logger
 }
 
 // ExecutorOption 定义Executor的函数选项
@@ -90,6 +93,7 @@ func NewExecutor(provider dispatcher.TaskProvider, disp *dispatcher.Dispatcher, 
 		stats:       &ExecutorStats{},
 		workerFree:  make(chan struct{}, 1000), // Buffer to avoid blocking
 		taskTimeout: 30 * time.Minute,          // 默认30分钟超时
+		logger:      logger.Named("executor"),
 	}
 
 	// 应用函数选项
