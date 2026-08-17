@@ -14,7 +14,6 @@ import (
 	"loopworker/internal/core/sandbox"
 	"loopworker/internal/core/scheduler"
 	"loopworker/internal/core/selfheal"
-	"loopworker/pkg/ai"
 	"loopworker/pkg/event"
 	"loopworker/pkg/skill"
 )
@@ -413,7 +412,7 @@ func TestExecuteAgentTask(t *testing.T) {
 	d := dispatcher.NewDispatcher(s, bus)
 	sb := sandbox.NewSandbox(sandbox.SandboxConfig{})
 
-	llm := ai.NewLLMClient(ts.URL, "mock-api-key")
+	llm := NewLLMClient(ts.URL, "mock-api-key")
 	e := NewExecutor(s, d, sb, bus, nil).WithLLMClient(llm)
 
 	ctx, cancel := context.WithCancel(context.Background())

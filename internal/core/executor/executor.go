@@ -11,7 +11,6 @@ import (
 	"loopworker/internal/core/sandbox"
 	"loopworker/internal/core/scheduler"
 	"loopworker/internal/core/selfheal"
-	"loopworker/pkg/ai"
 	"loopworker/pkg/event"
 	"loopworker/pkg/skill"
 	"loopworker/pkg/utils"
@@ -49,7 +48,7 @@ type Executor struct {
 	wg                sync.WaitGroup
 	stats             *ExecutorStats
 	workerFree        chan struct{}
-	llmClient         *ai.LLMClient
+	llmClient         *LLMClient
 	skillCtx          skill.SkillContext
 	llmCircuitBreaker *selfheal.CircuitBreaker
 	taskTimeout       time.Duration // 全局任务执行超时
@@ -66,7 +65,7 @@ func WithTaskTimeout(timeout time.Duration) ExecutorOption {
 }
 
 // WithLLMClient 设置LLM客户端（函数选项模式）
-func WithLLMClient(client *ai.LLMClient) ExecutorOption {
+func WithLLMClient(client *LLMClient) ExecutorOption {
 	return func(e *Executor) {
 		e.llmClient = client
 	}
@@ -101,13 +100,13 @@ func NewExecutor(provider dispatcher.TaskProvider, disp *dispatcher.Dispatcher, 
 	return e
 }
 
-func (e *Executor) SetLLMClient(client *ai.LLMClient) {
+func (e *Executor) SetLLMClient(client *LLMClient) {
 	e.mu.Lock()
 	e.llmClient = client
 	e.mu.Unlock()
 }
 
-func (e *Executor) WithLLMClient(client *ai.LLMClient) *Executor {
+func (e *Executor) WithLLMClient(client *LLMClient) *Executor {
 	e.SetLLMClient(client)
 	return e
 }
@@ -126,13 +125,13 @@ func (e *Executor) getSkillContext() skill.SkillContext {
 	return ctx
 }
 
-func (e *Executor) getLLMClient() *ai.LLMClient {
+func (e *Executor) getLLMClient() *LLMClient {
 	e.mu.RLock()
 	client := e.llmClient
 	e.mu.RUnlock()
 
 	if client == nil {
-		return ai.NewLLMClient("", "")
+		return NewLLMClient("", "")
 	}
 	return client
 }
@@ -275,7 +274,7 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 					}
 				}
 
-				cb := ai.NewContextBuilder(16000)
+				cb := NewContextBuilder(16000)
 				userPrompt := cb.BuildUserPrompt(upstreamResults, string(task.Input))
 
 				llm := e.getLLMClient()
