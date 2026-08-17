@@ -299,11 +299,11 @@ var profileCmd = &cobra.Command{
 
 		if output != "" {
 			profileData := map[string]interface{}{
-				"heap_alloc_mb": m.HeapAlloc / 1024 / 1024,
-				"heap_inuse_mb": m.HeapInuse / 1024 / 1024,
+				"heap_alloc_mb":  m.HeapAlloc / 1024 / 1024,
+				"heap_inuse_mb":  m.HeapInuse / 1024 / 1024,
 				"stack_inuse_mb": m.StackInuse / 1024 / 1024,
-				"goroutines":    runtime.NumGoroutine(),
-				"num_gc":        m.NumGC,
+				"goroutines":     runtime.NumGoroutine(),
+				"num_gc":         m.NumGC,
 			}
 			jsonData, _ := json.MarshalIndent(profileData, "", "  ")
 			if err := os.WriteFile(output, jsonData, 0644); err != nil {
