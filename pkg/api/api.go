@@ -282,8 +282,57 @@ func (req *CreateTaskRequest) Bind(r *http.Request) error {
 }
 
 func (s *APIServer) listTasks(w http.ResponseWriter, r *http.Request) {
-	tasks := s.scheduler.ListTasks(scheduler.TaskFilter{})
-	sendSuccess(w, r, tasks, http.StatusOK)
+	// Parse pagination parameters
+	limit := 50 // default
+	offset := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := fmt.Sscanf(l, "%d", &limit); err == nil && parsed == 1 {
+			if limit < 1 {
+				limit = 1
+			}
+			if limit > 1000 {
+				limit = 1000
+			}
+		}
+	}
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if parsed, err := fmt.Sscanf(o, "%d", &offset); err == nil && parsed == 1 {
+			if offset < 0 {
+				offset = 0
+			}
+		}
+	}
+
+	// Parse filter parameters
+	filter := scheduler.TaskFilter{}
+	if state := r.URL.Query().Get("state"); state != "" {
+		filter.States = []scheduler.TaskState{scheduler.TaskState(state)}
+	}
+	if taskType := r.URL.Query().Get("type"); taskType != "" {
+		filter.Types = []string{taskType}
+	}
+
+	tasks := s.scheduler.ListTasks(filter)
+
+	// Apply pagination
+	total := len(tasks)
+	if offset >= total {
+		tasks = []*scheduler.Task{}
+	} else {
+		end := offset + limit
+		if end > total {
+			end = total
+		}
+		tasks = tasks[offset:end]
+	}
+
+	// Return with pagination metadata
+	sendSuccess(w, r, map[string]interface{}{
+		"tasks":  tasks,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	}, http.StatusOK)
 }
 
 func (s *APIServer) createTask(w http.ResponseWriter, r *http.Request) {
