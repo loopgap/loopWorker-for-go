@@ -26,27 +26,141 @@ import (
 	"loopworker/pkg/workflow"
 )
 
+// Components holds all the core components of the LoopWorker server.
+type Components struct {
+	Scheduler      *scheduler.Scheduler
+	Dispatcher     *dispatcher.Dispatcher
+	Executor       *executor.Executor
+	Sandbox        *sandbox.Sandbox
+	PluginMgr      *plugin.PluginManager
+	Observer       *observer.Observer
+	SelfHeal       *selfheal.SelfHealer
+	Security       *security.SecurityManager
+	APIServer      *api.APIServer
+	EventBus       *event.EventBus
+	ServiceMgr     *service.ServiceManager
+	SkillRegistry  *skill.SkillRegistry
+	WorkflowEngine *workflow.WorkflowEngine
+	TaskBridge     *scheduler.SchedulerBridge
+}
+
+// BuildComponents creates all the core components from the given configuration.
+func BuildComponents(config *Config) (*Components, error) {
+	if config == nil {
+		config = DefaultConfig()
+	}
+
+	// Ensure data directory exists
+	if err := service.EnsureDirectories(config.DataDir); err != nil {
+		return nil, fmt.Errorf("ensure data directory: %w", err)
+	}
+
+	// Create event store
+	var eventStore event.EventStore = nil
+	if config.DataDir != "" {
+		store, storeErr := event.NewLocalEventStore(config.DataDir)
+		if storeErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to open event store at %s: %v (events not persisted)\n", config.DataDir, storeErr)
+		} else {
+			eventStore = store
+		}
+	}
+
+	// Create event bus
+	bus := event.NewEventBus(eventStore)
+
+	// Create sandbox
+	sb := sandbox.NewSandbox(sandbox.SandboxConfig{
+		MaxMemoryMB:   256,
+		MaxCPUSeconds: 30,
+		MaxOutputMB:   64,
+		MaxConcurrent: 10,
+	})
+	sb.SetEventBus(bus)
+
+	// Create skill registry with built-in skills
+	skillRegistry := skill.NewSkillRegistry()
+	skillRegistry.Register(skill.SkillDefinition{
+		Name:        "llm.chat",
+		Version:     "1.0.0",
+		Description: "LLM structured chat completion",
+		InputTypes:  []string{"text", "json"},
+		OutputTypes: []string{"text", "json"},
+	}, nil)
+	skillRegistry.Register(skill.SkillDefinition{
+		Name:        "research.anomaly",
+		Version:     "1.0.0",
+		Description: "Anomaly detection on numeric data",
+		InputTypes:  []string{"[]float64"},
+		OutputTypes: []string{"json"},
+	}, nil)
+
+	// Create plugin manager
+	pm, err := plugin.NewPluginManager(sb, bus, config.PluginsDir, plugin.WithSkillRegistry(skillRegistry))
+	if err != nil {
+		return nil, fmt.Errorf("create plugin manager: %w", err)
+	}
+
+	// Create workflow engine
+	wfe := workflow.NewWorkflowEngine(
+		workflow.WithEventBus(bus),
+	)
+
+	// Create scheduler and dispatcher
+	s := scheduler.NewScheduler(bus)
+	bridge := scheduler.NewSchedulerBridge(s)
+	wfe.SetDispatcher(bridge)
+	d := dispatcher.NewDispatcher(s, bus)
+
+	// Create observer
+	o := observer.NewObserver(bus)
+
+	// Create self-healer
+	sh := selfheal.NewSelfHealer(selfheal.DefaultConfig())
+
+	// Create executor
+	e := executor.NewExecutor(s, d, sb, bus, sh)
+
+	// Create security manager
+	sm := security.NewSecurityManager()
+
+	// Create API server
+	apiSrv := api.NewAPIServer(s, e, bus, wfe, o)
+
+	// Create service manager
+	mgr := service.NewServiceManager()
+
+	// Build skill context and inject into executor
+	skillConfig := map[string]interface{}{}
+	skillCtx := skillRegistry.BuildContext(nil, bus, nil, skillConfig)
+	e.SetSkillContext(skillCtx)
+
+	return &Components{
+		Scheduler:      s,
+		Dispatcher:     d,
+		Executor:       e,
+		Sandbox:        sb,
+		PluginMgr:      pm,
+		Observer:       o,
+		SelfHeal:       sh,
+		Security:       sm,
+		APIServer:      apiSrv,
+		EventBus:       bus,
+		ServiceMgr:     mgr,
+		SkillRegistry:  skillRegistry,
+		WorkflowEngine: wfe,
+		TaskBridge:     bridge,
+	}, nil
+}
+
 type Server struct {
-	config         *Config
-	startTime      time.Time
-	scheduler      *scheduler.Scheduler
-	dispatcher     *dispatcher.Dispatcher
-	executor       *executor.Executor
-	sandbox        *sandbox.Sandbox
-	pluginMgr      *plugin.PluginManager
-	observer       *observer.Observer
-	selfHeal       *selfheal.SelfHealer
-	security       *security.SecurityManager
-	apiServer      *api.APIServer
-	eventBus       *event.EventBus
-	serviceMgr     *service.ServiceManager
-	httpServer     *http.Server
-	skillRegistry  *skill.SkillRegistry
-	workflowEngine *workflow.WorkflowEngine
-	taskBridge     *scheduler.SchedulerBridge
-	mu             sync.RWMutex
-	ctx            context.Context
-	cancel         context.CancelFunc
+	config     *Config
+	startTime  time.Time
+	components *Components
+	httpServer *http.Server
+	mu         sync.RWMutex
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 type Config struct {
@@ -79,92 +193,27 @@ func New(config *Config) *Server {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	_ = service.EnsureDirectories(config.DataDir)
-
-	var eventStore event.EventStore = nil
-	if config.DataDir != "" {
-		store, storeErr := event.NewLocalEventStore(config.DataDir)
-		if storeErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to open event store at %s: %v (events not persisted)\n", config.DataDir, storeErr)
-		} else {
-			eventStore = store
-		}
+	components, err := BuildComponents(config)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to build components: %v\n", err)
+		// Continue with partial components
 	}
 
-	bus := event.NewEventBus(eventStore)
-
-	sb := sandbox.NewSandbox(sandbox.SandboxConfig{
-		MaxMemoryMB:   256,
-		MaxCPUSeconds: 30,
-		MaxOutputMB:   64,
-		MaxConcurrent: 10,
-	})
-	sb.SetEventBus(bus)
-
-	// Build SkillRegistry with built-in skill definitions
-	skillRegistry := skill.NewSkillRegistry()
-	skillRegistry.Register(skill.SkillDefinition{
-		Name:        "llm.chat",
-		Version:     "1.0.0",
-		Description: "LLM structured chat completion",
-		InputTypes:  []string{"text", "json"},
-		OutputTypes: []string{"text", "json"},
-	}, nil)
-	skillRegistry.Register(skill.SkillDefinition{
-		Name:        "research.anomaly",
-		Version:     "1.0.0",
-		Description: "Anomaly detection on numeric data",
-		InputTypes:  []string{"[]float64"},
-		OutputTypes: []string{"json"},
-	}, nil)
-
-	pm, _ := plugin.NewPluginManager(sb, bus, config.PluginsDir, plugin.WithSkillRegistry(skillRegistry))
-
-	// Build WorkflowEngine with event bus and task bridge
-	wfe := workflow.NewWorkflowEngine(
-		workflow.WithEventBus(bus),
-	)
-
-	s := scheduler.NewScheduler(bus)
-	bridge := scheduler.NewSchedulerBridge(s)
-	wfe.SetDispatcher(bridge)
-	d := dispatcher.NewDispatcher(s, bus)
-	o := observer.NewObserver(bus)
-	sh := selfheal.NewSelfHealer(selfheal.DefaultConfig())
-	e := executor.NewExecutor(s, d, sb, bus, sh)
-	sm := security.NewSecurityManager()
-	apiSrv := api.NewAPIServer(s, e, bus, wfe, o)
-	mgr := service.NewServiceManager()
-
-	// Build SkillContext and inject into executor
-	// Config map is always non-nil so downstream code can safely store keys into it.
-	skillConfig := map[string]interface{}{}
-	skillCtx := skillRegistry.BuildContext(nil, bus, nil, skillConfig)
-	e.SetSkillContext(skillCtx)
-
 	return &Server{
-		config:         config,
-		startTime:      time.Now(),
-		scheduler:      s,
-		dispatcher:     d,
-		executor:       e,
-		sandbox:        sb,
-		pluginMgr:      pm,
-		observer:       o,
-		selfHeal:       sh,
-		security:       sm,
-		apiServer:      apiSrv,
-		eventBus:       bus,
-		serviceMgr:     mgr,
-		httpServer:     nil,
-		skillRegistry:  skillRegistry,
-		workflowEngine: wfe,
-		ctx:            ctx,
-		cancel:         cancel,
+		config:     config,
+		startTime:  time.Now(),
+		components: components,
+		httpServer: nil,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 }
 
 func (s *Server) Start() error {
+	if s.components == nil {
+		return fmt.Errorf("server components not initialized")
+	}
+
 	// Ensure directories exist
 	if err := service.EnsureDirectories(
 		s.config.WorkDir,
@@ -175,18 +224,22 @@ func (s *Server) Start() error {
 	}
 
 	// Start observer
-	_ = s.observer.Start(s.ctx)
+	if err := s.components.Observer.Start(s.ctx); err != nil {
+		return fmt.Errorf("start observer: %w", err)
+	}
 
 	// Start worker and watchdog
-	_ = s.executor.StartWorker(s.ctx, "worker-1", "default")
-	s.executor.StartWatchdog(s.ctx)
+	if err := s.components.Executor.StartWorker(s.ctx, "worker-1", "default"); err != nil {
+		return fmt.Errorf("start worker: %w", err)
+	}
+	s.components.Executor.StartWatchdog(s.ctx)
 
 	addr := fmt.Sprintf(":%d", s.config.Port)
 	fmt.Printf("LoopWorker starting on http://localhost%s\n", addr)
 
 	s.httpServer = &http.Server{
 		Addr:    addr,
-		Handler: s.apiServer.Router,
+		Handler: s.components.APIServer.Router,
 	}
 
 	return s.httpServer.ListenAndServe()
@@ -205,44 +258,80 @@ func (s *Server) Stop() error {
 	}
 
 	// Stop executor workers
-	if err := s.executor.StopAllWorkers(context.Background()); err != nil {
-		fmt.Fprintf(os.Stderr, "Worker shutdown error: %v\n", err)
+	if s.components != nil && s.components.Executor != nil {
+		if err := s.components.Executor.StopAllWorkers(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "Worker shutdown error: %v\n", err)
+		}
 	}
 
-	s.eventBus.Close()
-	s.serviceMgr.StopAll()
+	// Close event bus
+	if s.components != nil && s.components.EventBus != nil {
+		s.components.EventBus.Close()
+	}
+
+	// Stop service manager
+	if s.components != nil && s.components.ServiceMgr != nil {
+		s.components.ServiceMgr.StopAll()
+	}
+
 	return nil
 }
 
+// GetComponents returns the server's components.
+func (s *Server) GetComponents() *Components {
+	return s.components
+}
+
 func (s *Server) GetScheduler() *scheduler.Scheduler {
-	return s.scheduler
+	if s.components == nil {
+		return nil
+	}
+	return s.components.Scheduler
 }
 
 func (s *Server) GetExecutor() *executor.Executor {
-	return s.executor
+	if s.components == nil {
+		return nil
+	}
+	return s.components.Executor
 }
 
 func (s *Server) GetObserver() *observer.Observer {
-	return s.observer
+	if s.components == nil {
+		return nil
+	}
+	return s.components.Observer
 }
 
 func (s *Server) GetSecurity() *security.SecurityManager {
-	return s.security
+	if s.components == nil {
+		return nil
+	}
+	return s.components.Security
 }
 
 // WorkflowEngine returns the server's workflow engine.
 func (s *Server) WorkflowEngine() *workflow.WorkflowEngine {
-	return s.workflowEngine
+	if s.components == nil {
+		return nil
+	}
+	return s.components.WorkflowEngine
 }
 
 // GetWorkflowEngine returns the workflow engine (used by API layer via interface).
 func (s *Server) GetWorkflowEngine() interface{} {
-	return s.workflowEngine
+	if s.components == nil {
+		return nil
+	}
+	return s.components.WorkflowEngine
 }
 
 // SkillRegistry returns the server's skill registry.
 func (s *Server) SkillRegistry() *skill.SkillRegistry {
-	return s.skillRegistry
+	if s.components == nil {
+		return nil
+	}
+	return s.components.SkillRegistry
 }
 
 type HealthResponse struct {
@@ -263,19 +352,27 @@ func (s *Server) HealthHandler() http.HandlerFunc {
 		}
 
 		// Check scheduler
-		stats := s.scheduler.GetStats()
-		if failed, ok := stats["failed"].(int); ok && failed > 0 {
-			health.Checks["scheduler"] = fmt.Sprintf("ok (%d failed tasks)", failed)
+		if s.components != nil && s.components.Scheduler != nil {
+			stats := s.components.Scheduler.GetStats()
+			if failed, ok := stats["failed"].(int); ok && failed > 0 {
+				health.Checks["scheduler"] = fmt.Sprintf("ok (%d failed tasks)", failed)
+			} else {
+				health.Checks["scheduler"] = "ok"
+			}
 		} else {
-			health.Checks["scheduler"] = "ok"
+			health.Checks["scheduler"] = "not available"
 		}
 
 		// Check executor
-		execStats := s.executor.GetStats()
-		if execStats.TotalTasksFailed > 0 {
-			health.Checks["executor"] = fmt.Sprintf("ok (%d workers, %d failed)", execStats.ActiveWorkers, execStats.TotalTasksFailed)
+		if s.components != nil && s.components.Executor != nil {
+			execStats := s.components.Executor.GetStats()
+			if execStats.TotalTasksFailed > 0 {
+				health.Checks["executor"] = fmt.Sprintf("ok (%d workers, %d failed)", execStats.ActiveWorkers, execStats.TotalTasksFailed)
+			} else {
+				health.Checks["executor"] = fmt.Sprintf("ok (%d workers)", execStats.ActiveWorkers)
+			}
 		} else {
-			health.Checks["executor"] = fmt.Sprintf("ok (%d workers)", execStats.ActiveWorkers)
+			health.Checks["executor"] = "not available"
 		}
 
 		// Check observer
@@ -285,10 +382,14 @@ func (s *Server) HealthHandler() http.HandlerFunc {
 		health.Checks["sandbox"] = "ok"
 
 		// Check self-healer
-		healStatus := s.selfHeal.GetHealthStatus()
-		health.Checks["selfheal"] = healStatus.String()
-		if healStatus != selfheal.HealthHealthy {
-			health.Status = "degraded"
+		if s.components != nil && s.components.SelfHeal != nil {
+			healStatus := s.components.SelfHeal.GetHealthStatus()
+			health.Checks["selfheal"] = healStatus.String()
+			if healStatus != selfheal.HealthHealthy {
+				health.Status = "degraded"
+			}
+		} else {
+			health.Checks["selfheal"] = "not available"
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -313,6 +414,11 @@ type StatusResponse struct {
 }
 
 func (s *Server) GetStatus() *StatusResponse {
+	stats := map[string]interface{}{}
+	if s.components != nil && s.components.Scheduler != nil {
+		stats = s.components.Scheduler.GetStats()
+	}
+
 	return &StatusResponse{
 		Status: "running",
 		Uptime: time.Since(s.startTime).String(),
@@ -322,7 +428,7 @@ func (s *Server) GetStatus() *StatusResponse {
 			"observer":  "ok",
 			"security":  "ok",
 		},
-		Stats: s.scheduler.GetStats(),
+		Stats: stats,
 	}
 }
 
