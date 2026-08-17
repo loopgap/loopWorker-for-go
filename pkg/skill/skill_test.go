@@ -6,7 +6,6 @@ import (
 	"sync"
 	"testing"
 
-	"loopworker/pkg/debugger"
 	"loopworker/pkg/event"
 )
 
@@ -124,7 +123,7 @@ func TestBuildContext(t *testing.T) {
 	// With values
 	bus := event.NewEventBus(nil)
 	defer bus.Close()
-	logger := debugger.NewDebugger()
+	logger := NewDebugger()
 	config := map[string]interface{}{"key": "value"}
 
 	ctx = r.BuildContext("llm-client", bus, logger, config)

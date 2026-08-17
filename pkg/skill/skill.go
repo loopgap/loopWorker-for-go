@@ -3,7 +3,6 @@ package skill
 import (
 	"context"
 	"errors"
-	"loopworker/pkg/debugger"
 	"loopworker/pkg/event"
 	"sync"
 )
@@ -29,7 +28,7 @@ type SkillProvider interface {
 type SkillContext struct {
 	LLM    interface{}
 	Bus    *event.EventBus
-	Logger *debugger.Debugger
+	Logger *Debugger
 	Config map[string]interface{}
 }
 
@@ -104,7 +103,7 @@ func (r *SkillRegistry) CheckDependencies(required []string) []string {
 func (r *SkillRegistry) BuildContext(
 	llmClient interface{},
 	bus *event.EventBus,
-	logger *debugger.Debugger,
+	logger *Debugger,
 	config map[string]interface{},
 ) SkillContext {
 	ctx := SkillContext{
