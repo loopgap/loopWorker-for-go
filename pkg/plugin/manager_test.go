@@ -3,8 +3,10 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"loopworker/internal/core/sandbox"
@@ -179,4 +181,154 @@ func TestPluginManagerLoadAllPlugins(t *testing.T) {
 	if len(plugins) != 2 {
 		t.Errorf("expected 2 plugins, got %d", len(plugins))
 	}
+}
+
+// 并发压力测试
+
+func TestConcurrentLoadPlugin(t *testing.T) {
+	tmpDir := t.TempDir()
+	pluginsDir := filepath.Join(tmpDir, "plugins")
+	os.MkdirAll(pluginsDir, 0755)
+
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	mgr, _ := NewPluginManager(s, bus, pluginsDir)
+	var wg sync.WaitGroup
+	n := 50
+
+	// 并发加载插件
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			pluginDir := filepath.Join(tmpDir, fmt.Sprintf("plugin-%d", idx))
+			os.MkdirAll(pluginDir, 0755)
+			info := PluginInfo{Name: fmt.Sprintf("plugin-%d", idx), Version: "1.0"}
+			data, _ := json.Marshal(info)
+			os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0644)
+			_ = mgr.LoadPlugin(context.Background(), pluginDir)
+		}(i)
+	}
+	wg.Wait()
+
+	plugins := mgr.ListPlugins()
+	if len(plugins) != n {
+		t.Errorf("expected %d plugins, got %d", n, len(plugins))
+	}
+}
+
+func TestConcurrentUnloadPlugin(t *testing.T) {
+	tmpDir := t.TempDir()
+	pluginsDir := filepath.Join(tmpDir, "plugins")
+	os.MkdirAll(pluginsDir, 0755)
+
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	mgr, _ := NewPluginManager(s, bus, pluginsDir)
+
+	// 预先加载插件
+	for i := 0; i < 10; i++ {
+		pluginDir := filepath.Join(tmpDir, fmt.Sprintf("plugin-%d", i))
+		os.MkdirAll(pluginDir, 0755)
+		info := PluginInfo{Name: fmt.Sprintf("plugin-%d", i), Version: "1.0"}
+		data, _ := json.Marshal(info)
+		os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0644)
+		_ = mgr.LoadPlugin(context.Background(), pluginDir)
+	}
+
+	var wg sync.WaitGroup
+
+	// 并发卸载插件
+	wg.Add(10)
+	for i := 0; i < 10; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			pluginName := fmt.Sprintf("plugin-%d", idx)
+			_ = mgr.UnloadPlugin(context.Background(), pluginName)
+		}(i)
+	}
+	wg.Wait()
+
+	plugins := mgr.ListPlugins()
+	if len(plugins) != 0 {
+		t.Errorf("expected 0 plugins after unload, got %d", len(plugins))
+	}
+}
+
+func TestConcurrentListPlugins(t *testing.T) {
+	tmpDir := t.TempDir()
+	pluginsDir := filepath.Join(tmpDir, "plugins")
+	os.MkdirAll(pluginsDir, 0755)
+
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	mgr, _ := NewPluginManager(s, bus, pluginsDir)
+
+	// 预先加载插件
+	for i := 0; i < 10; i++ {
+		pluginDir := filepath.Join(tmpDir, fmt.Sprintf("plugin-%d", i))
+		os.MkdirAll(pluginDir, 0755)
+		info := PluginInfo{Name: fmt.Sprintf("plugin-%d", i), Version: "1.0"}
+		data, _ := json.Marshal(info)
+		os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0644)
+		_ = mgr.LoadPlugin(context.Background(), pluginDir)
+	}
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发读取插件列表
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			plugins := mgr.ListPlugins()
+			if len(plugins) != 10 {
+				t.Errorf("expected 10 plugins, got %d", len(plugins))
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestConcurrentMixedOperations(t *testing.T) {
+	tmpDir := t.TempDir()
+	pluginsDir := filepath.Join(tmpDir, "plugins")
+	os.MkdirAll(pluginsDir, 0755)
+
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	mgr, _ := NewPluginManager(s, bus, pluginsDir)
+	var wg sync.WaitGroup
+	n := 50
+
+	// 并发混合操作
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			pluginName := fmt.Sprintf("plugin-%d", idx%10)
+			pluginDir := filepath.Join(tmpDir, pluginName)
+			os.MkdirAll(pluginDir, 0755)
+			info := PluginInfo{Name: pluginName, Version: "1.0"}
+			data, _ := json.Marshal(info)
+			os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0644)
+
+			// 加载插件
+			_ = mgr.LoadPlugin(context.Background(), pluginDir)
+			// 列出插件
+			_ = mgr.ListPlugins()
+			// 卸载插件
+			_ = mgr.UnloadPlugin(context.Background(), pluginName)
+		}(i)
+	}
+	wg.Wait()
 }

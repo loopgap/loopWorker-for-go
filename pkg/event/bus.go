@@ -276,7 +276,7 @@ func (eb *EventBus) GetStats() *BusStats {
 		EventsDropped:   dropped,
 		SubscriberCount: atomic.LoadInt32(&eb.stats.SubscriberCount),
 		AvgDeliveryTime: avgDelivery,
-		MaxDeliveryTime: eb.stats.MaxDeliveryTime,
+		MaxDeliveryTime: time.Duration(atomic.LoadInt64((*int64)(&eb.stats.MaxDeliveryTime))),
 	}
 }
 

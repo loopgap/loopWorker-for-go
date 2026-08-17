@@ -1,6 +1,8 @@
 package security
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -265,4 +267,155 @@ func TestDefaultRoles(t *testing.T) {
 	if sm.Authorize(viewer, PermWrite) {
 		t.Error("viewer should not have write")
 	}
+}
+
+// 并发压力测试
+
+func TestConcurrentCreateUser(t *testing.T) {
+	sm := NewSecurityManager()
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发创建用户
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			username := fmt.Sprintf("user-%d", idx)
+			_, err := sm.CreateUser(username, "password", "viewer")
+			if err != nil {
+				t.Errorf("create user %s: %v", username, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// 验证用户数量
+	if len(sm.users) != n {
+		t.Errorf("expected %d users, got %d", n, len(sm.users))
+	}
+}
+
+func TestConcurrentAuthenticate(t *testing.T) {
+	sm := NewSecurityManager()
+
+	// 预先创建用户
+	for i := 0; i < 10; i++ {
+		username := fmt.Sprintf("user-%d", i)
+		_, _ = sm.CreateUser(username, "password", "viewer")
+	}
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发认证
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			username := fmt.Sprintf("user-%d", idx%10)
+			_, err := sm.Authenticate(username, "password")
+			if err != nil {
+				t.Errorf("authenticate %s: %v", username, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+func TestConcurrentValidateToken(t *testing.T) {
+	sm := NewSecurityManager()
+
+	// 预先创建用户并获取token
+	_, _ = sm.CreateUser("user", "password", "viewer")
+	token, _ := sm.Authenticate("user", "password")
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发验证token
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_, err := sm.ValidateToken(token.Value)
+			if err != nil {
+				t.Errorf("validate token: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestConcurrentAuthorize(t *testing.T) {
+	sm := NewSecurityManager()
+
+	// 预先创建用户
+	users := make([]*User, 10)
+	for i := 0; i < 10; i++ {
+		username := fmt.Sprintf("user-%d", i)
+		user, _ := sm.CreateUser(username, "password", "viewer")
+		users[i] = user
+	}
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发授权检查
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			user := users[idx%10]
+			_ = sm.Authorize(user, PermRead)
+		}(i)
+	}
+	wg.Wait()
+}
+
+func TestConcurrentRevokeToken(t *testing.T) {
+	sm := NewSecurityManager()
+
+	// 预先创建用户并获取token
+	_, _ = sm.CreateUser("user", "password", "viewer")
+	token, _ := sm.Authenticate("user", "password")
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发撤销token
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			sm.RevokeToken(token.Value)
+		}()
+	}
+	wg.Wait()
+}
+
+func TestConcurrentMixedOperations(t *testing.T) {
+	sm := NewSecurityManager()
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发混合操作
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			username := fmt.Sprintf("user-%d", idx%10)
+			// 创建用户
+			_, _ = sm.CreateUser(username, "password", "viewer")
+			// 认证
+			token, _ := sm.Authenticate(username, "password")
+			if token != nil {
+				// 验证token
+				_, _ = sm.ValidateToken(token.Value)
+				// 撤销token
+				sm.RevokeToken(token.Value)
+			}
+		}(i)
+	}
+	wg.Wait()
 }

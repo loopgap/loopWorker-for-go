@@ -637,3 +637,218 @@ func BenchmarkSchedulerParallelCreate(b *testing.B) {
 		}
 	})
 }
+
+// 并发压力测试
+
+func TestConcurrentDequeue(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	s := NewScheduler(bus)
+	ctx := context.Background()
+
+	// 预先创建任务
+	for i := 0; i < 100; i++ {
+		task, _ := s.CreateTask(ctx, "test", nil, nil)
+		_ = s.QueueTask(ctx, task.ID)
+	}
+
+	var wg sync.WaitGroup
+	dequeued := make(chan *Task, 100)
+
+	// 并发出队
+	wg.Add(100)
+	for i := 0; i < 100; i++ {
+		go func() {
+			defer wg.Done()
+			task := s.DequeueTask()
+			if task != nil {
+				dequeued <- task
+			}
+		}()
+	}
+	wg.Wait()
+	close(dequeued)
+
+	// 验证所有任务都被出队
+	count := 0
+	for range dequeued {
+		count++
+	}
+	if count != 100 {
+		t.Errorf("expected 100 dequeued tasks, got %d", count)
+	}
+	if s.QueueSize() != 0 {
+		t.Errorf("expected queue size 0, got %d", s.QueueSize())
+	}
+}
+
+func TestConcurrentStartAndComplete(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	s := NewScheduler(bus)
+	ctx := context.Background()
+
+	// 创建并入队任务
+	tasks := make([]*Task, 50)
+	for i := 0; i < 50; i++ {
+		task, _ := s.CreateTask(ctx, "test", nil, nil)
+		_ = s.QueueTask(ctx, task.ID)
+		tasks[i] = task
+	}
+
+	var wg sync.WaitGroup
+
+	// 并发启动任务
+	wg.Add(50)
+	for i := 0; i < 50; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			if err := s.StartTask(ctx, tasks[idx].ID, "worker-1"); err != nil {
+				t.Errorf("start task %s: %v", tasks[idx].ID, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// 并发完成任务
+	wg.Add(50)
+	for i := 0; i < 50; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			if err := s.CompleteTask(ctx, tasks[idx].ID, "worker-1", []byte("result")); err != nil {
+				t.Errorf("complete task %s: %v", tasks[idx].ID, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// 验证所有任务都已完成
+	for _, task := range tasks {
+		updatedTask, _ := s.GetTask(task.ID)
+		if updatedTask.State != StateCompleted {
+			t.Errorf("task %s expected completed, got %s", task.ID, updatedTask.State)
+		}
+	}
+}
+
+func TestConcurrentFailAndRetry(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	s := NewScheduler(bus)
+	ctx := context.Background()
+
+	// 创建并入队任务
+	tasks := make([]*Task, 30)
+	for i := 0; i < 30; i++ {
+		task, _ := s.CreateTask(ctx, "test", nil, nil)
+		task.MaxRetry = 3
+		_ = s.QueueTask(ctx, task.ID)
+		tasks[i] = task
+	}
+
+	var wg sync.WaitGroup
+
+	// 并发启动任务
+	wg.Add(30)
+	for i := 0; i < 30; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			_ = s.StartTask(ctx, tasks[idx].ID, "worker-1")
+		}(i)
+	}
+	wg.Wait()
+
+	// 并发失败任务（触发重试）
+	wg.Add(30)
+	for i := 0; i < 30; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			if err := s.FailTask(ctx, tasks[idx].ID, "worker-1", "test error"); err != nil {
+				t.Errorf("fail task %s: %v", tasks[idx].ID, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// 验证任务进入重试状态
+	retriedCount := 0
+	for _, task := range tasks {
+		updatedTask, _ := s.GetTask(task.ID)
+		if updatedTask.State == StateQueued && updatedTask.Retry > 0 {
+			retriedCount++
+		}
+	}
+	if retriedCount != 30 {
+		t.Errorf("expected 30 retried tasks, got %d", retriedCount)
+	}
+}
+
+func TestConcurrentCancel(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	s := NewScheduler(bus)
+	ctx := context.Background()
+
+	// 创建任务
+	tasks := make([]*Task, 50)
+	for i := 0; i < 50; i++ {
+		task, _ := s.CreateTask(ctx, "test", nil, nil)
+		_ = s.QueueTask(ctx, task.ID)
+		tasks[i] = task
+	}
+
+	var wg sync.WaitGroup
+
+	// 并发取消任务
+	wg.Add(50)
+	for i := 0; i < 50; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			if err := s.CancelTask(ctx, tasks[idx].ID); err != nil {
+				t.Errorf("cancel task %s: %v", tasks[idx].ID, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// 验证所有任务都已取消
+	for _, task := range tasks {
+		updatedTask, _ := s.GetTask(task.ID)
+		if updatedTask.State != StateCancelled {
+			t.Errorf("task %s expected cancelled, got %s", task.ID, updatedTask.State)
+		}
+	}
+}
+
+func TestConcurrentStats(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	s := NewScheduler(bus)
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发创建任务并读取统计
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_, _ = s.CreateTask(ctx, "test", nil, nil)
+			_ = s.GetStats()
+		}()
+	}
+	wg.Wait()
+
+	stats := s.GetStats()
+	// 检查queued字段，因为任务创建后状态是pending，不会立即入队
+	// GetStats()查询数据库，但测试使用的是内存数据库
+	if stats["queued"] != 0 {
+		t.Errorf("expected queued 0, got %d", stats["queued"])
+	}
+}

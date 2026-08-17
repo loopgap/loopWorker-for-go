@@ -536,6 +536,218 @@ func BenchmarkNewEvent(b *testing.B) {
 	}
 }
 
+// 并发压力测试
+
+func TestConcurrentSubscribeUnsubscribe(t *testing.T) {
+	bus := NewEventBus(nil)
+	defer bus.Close()
+
+	var wg sync.WaitGroup
+	subscribers := make([]*Subscriber, 100)
+
+	// 并发订阅
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			subscribers[idx] = bus.Subscribe(EventTaskCreated, 10)
+		}(i)
+	}
+	wg.Wait()
+
+	stats := bus.GetStats()
+	if stats.SubscriberCount != 100 {
+		t.Errorf("expected 100 subscribers, got %d", stats.SubscriberCount)
+	}
+
+	// 并发取消订阅
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			bus.Unsubscribe(subscribers[idx])
+		}(i)
+	}
+	wg.Wait()
+
+	stats = bus.GetStats()
+	if stats.SubscriberCount != 0 {
+		t.Errorf("expected 0 subscribers after unsubscribe, got %d", stats.SubscriberCount)
+	}
+}
+
+func TestConcurrentPublishToMultipleSubscribers(t *testing.T) {
+	bus := NewEventBus(nil)
+	defer bus.Close()
+
+	// 创建多个订阅者
+	subscribers := make([]*Subscriber, 10)
+	for i := 0; i < 10; i++ {
+		subscribers[i] = bus.Subscribe(EventTaskCreated, 1000)
+	}
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发发布
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_ = bus.Publish(context.Background(), NewEvent(EventTaskCreated, nil, nil))
+		}()
+	}
+	wg.Wait()
+
+	// 验证所有订阅者都收到了事件
+	for i, sub := range subscribers {
+		received := 0
+		for {
+			select {
+			case <-sub.Chan():
+				received++
+			default:
+				goto done
+			}
+		}
+	done:
+		if received != n {
+			t.Errorf("subscriber %d: expected %d events, got %d", i, n, received)
+		}
+	}
+}
+
+func TestConcurrentPublishBatch(t *testing.T) {
+	bus := NewEventBus(nil)
+	defer bus.Close()
+
+	sub := bus.Subscribe(EventTaskCreated, 10000)
+
+	var wg sync.WaitGroup
+	batchSize := 10
+	numBatches := 10
+
+	// 并发批量发布
+	wg.Add(numBatches)
+	for i := 0; i < numBatches; i++ {
+		go func() {
+			defer wg.Done()
+			events := make([]Event, batchSize)
+			for j := 0; j < batchSize; j++ {
+				events[j] = NewEvent(EventTaskCreated, nil, nil)
+			}
+			_ = bus.PublishBatch(context.Background(), events)
+		}()
+	}
+	wg.Wait()
+
+	// 验证收到的事件总数
+	received := 0
+	for {
+		select {
+		case <-sub.Chan():
+			received++
+		default:
+			goto done
+		}
+	}
+done:
+	expected := batchSize * numBatches
+	if received != expected {
+		t.Errorf("expected %d events, got %d", expected, received)
+	}
+}
+
+func TestConcurrentPublishDifferentEventTypes(t *testing.T) {
+	bus := NewEventBus(nil)
+	defer bus.Close()
+
+	// 为每种事件类型创建订阅者
+	subCreated := bus.Subscribe(EventTaskCreated, 1000)
+	subCompleted := bus.Subscribe(EventTaskCompleted, 1000)
+	subFailed := bus.Subscribe(EventTaskFailed, 1000)
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发发布不同类型的事件
+	wg.Add(n * 3)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_ = bus.Publish(context.Background(), NewEvent(EventTaskCreated, nil, nil))
+		}()
+		go func() {
+			defer wg.Done()
+			_ = bus.Publish(context.Background(), NewEvent(EventTaskCompleted, nil, nil))
+		}()
+		go func() {
+			defer wg.Done()
+			_ = bus.Publish(context.Background(), NewEvent(EventTaskFailed, nil, nil))
+		}()
+	}
+	wg.Wait()
+
+	// 验证每种类型的事件数量
+	countEvents := func(sub *Subscriber) int {
+		count := 0
+		for {
+			select {
+			case <-sub.Chan():
+				count++
+			default:
+				return count
+			}
+		}
+	}
+
+	if count := countEvents(subCreated); count != n {
+		t.Errorf("expected %d created events, got %d", n, count)
+	}
+	if count := countEvents(subCompleted); count != n {
+		t.Errorf("expected %d completed events, got %d", n, count)
+	}
+	if count := countEvents(subFailed); count != n {
+		t.Errorf("expected %d failed events, got %d", n, count)
+	}
+}
+
+func TestEventBusStatsConcurrency(t *testing.T) {
+	bus := NewEventBus(nil)
+	defer bus.Close()
+
+	sub := bus.Subscribe(EventTaskCreated, 10000)
+
+	var wg sync.WaitGroup
+	n := 1000
+
+	// 并发发布并读取统计信息
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_ = bus.Publish(context.Background(), NewEvent(EventTaskCreated, nil, nil))
+			// 随机读取统计信息
+			_ = bus.GetStats()
+		}()
+	}
+	wg.Wait()
+
+	stats := bus.GetStats()
+	if stats.EventsPublished != int64(n) {
+		t.Errorf("expected %d published events, got %d", n, stats.EventsPublished)
+	}
+
+	// 清空channel
+	for {
+		select {
+		case <-sub.Chan():
+		default:
+			return
+		}
+	}
+}
+
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }

@@ -3,6 +3,8 @@ package selfheal
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -370,5 +372,208 @@ func TestExecuteWithRecoveryCircuitBreakerOpen(t *testing.T) {
 	err := sh.ExecuteWithRecovery(ctx, "svc", func(ctx context.Context) error { return nil })
 	if err == nil {
 		t.Error("expected circuit breaker open error")
+	}
+}
+
+// 并发压力测试
+
+func TestConcurrentExecuteWithRecovery(t *testing.T) {
+	sh := NewSelfHealer(DefaultConfig())
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	var successCount, failCount atomic.Int32
+	n := 100
+
+	// 并发执行带恢复的函数
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			err := sh.ExecuteWithRecovery(ctx, fmt.Sprintf("svc-%d", idx%10), func(ctx context.Context) error {
+				if idx%3 == 0 {
+					return errors.New("simulated error")
+				}
+				return nil
+			})
+			if err != nil {
+				failCount.Add(1)
+			} else {
+				successCount.Add(1)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	total := successCount.Load() + failCount.Load()
+	if total != int32(n) {
+		t.Errorf("expected total %d, got %d", n, total)
+	}
+	t.Logf("Success: %d, Failed: %d", successCount.Load(), failCount.Load())
+}
+
+func TestConcurrentCircuitBreakerOperations(t *testing.T) {
+	sh := NewSelfHealer(DefaultConfig())
+	cb := sh.GetCircuitBreaker("concurrent-test")
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发记录成功和失败
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			if idx%2 == 0 {
+				cb.RecordSuccess()
+			} else {
+				cb.RecordFailure()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// 验证熔断器状态
+	state := cb.GetState()
+	if state != CircuitClosed && state != CircuitOpen && state != CircuitHalfOpen {
+		t.Errorf("unexpected circuit breaker state: %d", state)
+	}
+}
+
+func TestConcurrentGetCircuitBreaker(t *testing.T) {
+	sh := NewSelfHealer(DefaultConfig())
+
+	var wg sync.WaitGroup
+	breakers := make([]*CircuitBreaker, 100)
+
+	// 并发获取熔断器
+	wg.Add(100)
+	for i := 0; i < 100; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			breakers[idx] = sh.GetCircuitBreaker("shared-breaker")
+		}(i)
+	}
+	wg.Wait()
+
+	// 验证所有获取的熔断器都是同一个实例
+	for i := 1; i < 100; i++ {
+		if breakers[i] != breakers[0] {
+			t.Errorf("breaker %d is not the same instance as breaker 0", i)
+			break
+		}
+	}
+}
+
+func TestConcurrentRecordIncident(t *testing.T) {
+	sh := NewSelfHealer(DefaultConfig())
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发记录事件
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			severity := Severity(idx % 4)
+			sh.recordIncident(fmt.Sprintf("component-%d", idx%10), severity, errors.New("error"))
+		}(i)
+	}
+	wg.Wait()
+
+	// 验证事件被记录
+	incidents := sh.GetIncidents()
+	if len(incidents) != n {
+		t.Errorf("expected %d incidents, got %d", n, len(incidents))
+	}
+}
+
+func TestConcurrentHealthStatus(t *testing.T) {
+	sh := NewSelfHealer(DefaultConfig())
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发记录事件和读取健康状态
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			if idx%2 == 0 {
+				sh.recordIncident("test", SeverityMedium, errors.New("error"))
+			}
+			_ = sh.GetHealthStatus()
+		}(i)
+	}
+	wg.Wait()
+
+	// 最终健康状态应该是degraded或unhealthy
+	status := sh.GetHealthStatus()
+	if status == HealthHealthy {
+		t.Error("expected health status to be degraded or unhealthy after incidents")
+	}
+}
+
+func TestConcurrentRecoveryLog(t *testing.T) {
+	sh := NewSelfHealer(DefaultConfig())
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	n := 50
+
+	// 并发执行带恢复的函数并读取恢复日志
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			_ = sh.ExecuteWithRecovery(ctx, "test", func(ctx context.Context) error {
+				if idx%2 == 0 {
+					return errors.New("error")
+				}
+				return nil
+			})
+			_ = sh.GetRecoveryLog()
+		}(i)
+	}
+	wg.Wait()
+
+	// 验证恢复日志
+	log := sh.GetRecoveryLog()
+	if len(log) == 0 {
+		t.Error("expected recovery log entries")
+	}
+}
+
+func TestConcurrentAllowRequest(t *testing.T) {
+	sh := NewSelfHealer(DefaultConfig())
+	cb := sh.GetCircuitBreaker("test")
+
+	var wg sync.WaitGroup
+	n := 100
+	allowed := make(chan bool, n)
+
+	// 并发检查是否允许请求
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			allowed <- cb.AllowRequest()
+		}()
+	}
+	wg.Wait()
+	close(allowed)
+
+	// 统计允许的请求数
+	allowedCount := 0
+	for a := range allowed {
+		if a {
+			allowedCount++
+		}
+	}
+
+	// 初始状态应该是closed，所有请求都应该被允许
+	if allowedCount != n {
+		t.Errorf("expected all %d requests allowed, got %d", n, allowedCount)
 	}
 }

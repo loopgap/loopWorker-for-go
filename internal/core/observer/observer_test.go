@@ -2,6 +2,8 @@ package observer
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -178,5 +180,263 @@ func TestReset(t *testing.T) {
 	logs := o.GetLogs()
 	if len(logs) != 0 {
 		t.Errorf("expected 0 logs after reset, got %d", len(logs))
+	}
+}
+
+// 并发压力测试
+
+func TestConcurrentIncrementCounter(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	o := NewObserver(bus)
+	var wg sync.WaitGroup
+	n := 1000
+
+	// 并发递增计数器
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			o.IncrementCounter("concurrent.counter", nil)
+		}()
+	}
+	wg.Wait()
+
+	metrics := o.GetMetrics()
+	if len(metrics) != 1 {
+		t.Errorf("expected 1 metric, got %d", len(metrics))
+	}
+
+	// 验证计数器值
+	for _, m := range metrics {
+		if m.Name == "concurrent.counter" && m.Value != float64(n) {
+			t.Errorf("expected counter value %d, got %f", n, m.Value)
+		}
+	}
+}
+
+func TestConcurrentSetGauge(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	o := NewObserver(bus)
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发设置gauge
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			o.SetGauge("concurrent.gauge", float64(idx), nil)
+		}(i)
+	}
+	wg.Wait()
+
+	metrics := o.GetMetrics()
+	if len(metrics) != 1 {
+		t.Errorf("expected 1 metric, got %d", len(metrics))
+	}
+}
+
+func TestConcurrentObserveHistogram(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	o := NewObserver(bus)
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发观察histogram
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			o.ObserveHistogram("concurrent.histogram", float64(idx), nil)
+		}(i)
+	}
+	wg.Wait()
+
+	metrics := o.GetMetrics()
+	if len(metrics) != 1 {
+		t.Errorf("expected 1 metric, got %d", len(metrics))
+	}
+}
+
+func TestConcurrentLog(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	o := NewObserver(bus)
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发记录日志
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			o.Log("info", fmt.Sprintf("log-%d", idx), map[string]interface{}{"index": idx})
+		}(i)
+	}
+	wg.Wait()
+
+	logs := o.GetLogs()
+	if len(logs) != n {
+		t.Errorf("expected %d logs, got %d", n, len(logs))
+	}
+}
+
+func TestConcurrentTracing(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	o := NewObserver(bus)
+	var wg sync.WaitGroup
+	n := 50
+
+	// 并发创建和结束trace
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			span := o.StartTrace(fmt.Sprintf("operation-%d", idx))
+			time.Sleep(time.Millisecond)
+			o.EndTrace(span, "completed")
+		}(i)
+	}
+	wg.Wait()
+
+	traces := o.GetTraces()
+	if len(traces) != n {
+		t.Errorf("expected %d traces, got %d", n, len(traces))
+	}
+}
+
+func TestConcurrentGetMetrics(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	o := NewObserver(bus)
+
+	// 先添加一些指标
+	for i := 0; i < 10; i++ {
+		o.IncrementCounter(fmt.Sprintf("metric-%d", i), nil)
+	}
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发读取指标
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			metrics := o.GetMetrics()
+			if len(metrics) != 10 {
+				t.Errorf("expected 10 metrics, got %d", len(metrics))
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestConcurrentGetLogs(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	o := NewObserver(bus)
+
+	// 先添加一些日志
+	for i := 0; i < 10; i++ {
+		o.Log("info", fmt.Sprintf("log-%d", i), nil)
+	}
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发读取日志
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			logs := o.GetLogs()
+			if len(logs) != 10 {
+				t.Errorf("expected 10 logs, got %d", len(logs))
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestConcurrentGetTraces(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	o := NewObserver(bus)
+
+	// 先添加一些trace
+	for i := 0; i < 10; i++ {
+		span := o.StartTrace(fmt.Sprintf("operation-%d", i))
+		o.EndTrace(span, "completed")
+	}
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发读取traces
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			traces := o.GetTraces()
+			if len(traces) != 10 {
+				t.Errorf("expected 10 traces, got %d", len(traces))
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestConcurrentMixedOperations(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	o := NewObserver(bus)
+	ctx := context.Background()
+	_ = o.Start(ctx)
+
+	var wg sync.WaitGroup
+	n := 100
+
+	// 并发混合操作
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			// 混合各种操作
+			o.IncrementCounter("mixed.counter", nil)
+			o.SetGauge("mixed.gauge", float64(idx), nil)
+			o.Log("info", fmt.Sprintf("log-%d", idx), nil)
+			span := o.StartTrace(fmt.Sprintf("op-%d", idx))
+			o.EndTrace(span, "completed")
+		}(i)
+	}
+	wg.Wait()
+
+	// 验证所有操作都完成了
+	metrics := o.GetMetrics()
+	logs := o.GetLogs()
+	traces := o.GetTraces()
+
+	if len(metrics) < 2 { // counter和gauge
+		t.Errorf("expected at least 2 metrics, got %d", len(metrics))
+	}
+	if len(logs) != n {
+		t.Errorf("expected %d logs, got %d", n, len(logs))
+	}
+	if len(traces) != n {
+		t.Errorf("expected %d traces, got %d", n, len(traces))
 	}
 }

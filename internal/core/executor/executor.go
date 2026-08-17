@@ -52,6 +52,24 @@ type Executor struct {
 	llmClient         *ai.LLMClient
 	skillCtx          skill.SkillContext
 	llmCircuitBreaker *selfheal.CircuitBreaker
+	taskTimeout       time.Duration // 全局任务执行超时
+}
+
+// ExecutorOption 定义Executor的函数选项
+type ExecutorOption func(*Executor)
+
+// WithTaskTimeout 设置全局任务执行超时
+func WithTaskTimeout(timeout time.Duration) ExecutorOption {
+	return func(e *Executor) {
+		e.taskTimeout = timeout
+	}
+}
+
+// WithLLMClient 设置LLM客户端（函数选项模式）
+func WithLLMClient(client *ai.LLMClient) ExecutorOption {
+	return func(e *Executor) {
+		e.llmClient = client
+	}
 }
 
 type ExecutorStats struct {
@@ -62,8 +80,8 @@ type ExecutorStats struct {
 	IdleWorkers      int32
 }
 
-func NewExecutor(provider dispatcher.TaskProvider, disp *dispatcher.Dispatcher, sandbox *sandbox.Sandbox, eventBus *event.EventBus, healer *selfheal.SelfHealer) *Executor {
-	return &Executor{
+func NewExecutor(provider dispatcher.TaskProvider, disp *dispatcher.Dispatcher, sandbox *sandbox.Sandbox, eventBus *event.EventBus, healer *selfheal.SelfHealer, opts ...ExecutorOption) *Executor {
+	e := &Executor{
 		provider:   provider,
 		dispatcher: disp,
 		sandbox:    sandbox,
@@ -72,7 +90,15 @@ func NewExecutor(provider dispatcher.TaskProvider, disp *dispatcher.Dispatcher, 
 		workers:    make(map[string]*Worker),
 		stats:      &ExecutorStats{},
 		workerFree: make(chan struct{}, 1000), // Buffer to avoid blocking
+		taskTimeout: 30 * time.Minute,        // 默认30分钟超时
 	}
+
+	// 应用函数选项
+	for _, opt := range opts {
+		opt(e)
+	}
+
+	return e
 }
 
 func (e *Executor) SetLLMClient(client *ai.LLMClient) {
@@ -223,6 +249,10 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 
 			start := time.Now()
 
+			// 创建任务超时context
+			taskCtx, taskCancel := context.WithTimeout(ctx, e.taskTimeout)
+			defer taskCancel()
+
 			// Execute task
 			var output []byte
 			var execErr error
@@ -263,7 +293,12 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 				if e.llmCircuitBreaker != nil && !e.llmCircuitBreaker.AllowRequest() {
 					execErr = fmt.Errorf("circuit breaker open: LLM temporarily unavailable")
 				} else {
-					llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
+					// LLM调用超时独立设置，但受全局任务超时约束
+					llmTimeout := 30 * time.Second
+					if llmTimeout > e.taskTimeout {
+						llmTimeout = e.taskTimeout
+					}
+					llmCtx, llmCancel := context.WithTimeout(taskCtx, llmTimeout)
 					llmOut, execErr = llm.GenerateStructured(llmCtx, model, systemPrompt, userPrompt, schema)
 					llmCancel()
 					if execErr == nil {
@@ -279,7 +314,7 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 				}
 			} else {
 				if e.selfHealer != nil {
-					execErr = e.selfHealer.ExecuteWithRecovery(ctx, worker.PluginID, func(innerCtx context.Context) error {
+					execErr = e.selfHealer.ExecuteWithRecovery(taskCtx, worker.PluginID, func(innerCtx context.Context) error {
 						plugins := e.sandbox.ListPlugins()
 						if len(plugins) == 0 {
 							return fmt.Errorf("no plugins available")
@@ -307,7 +342,7 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 						execErr = fmt.Errorf("no plugins available")
 					} else {
 						skillCtx := e.getSkillContext()
-						output, execErr = e.sandbox.Execute(ctx, worker.PluginID, task.Input, skillCtx)
+						output, execErr = e.sandbox.Execute(taskCtx, worker.PluginID, task.Input, skillCtx)
 
 						// Publish skill invoked event when LLM skill is available
 						if execErr == nil && skillCtx.Bus != nil && skillCtx.Config != nil {
@@ -321,6 +356,11 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 						}
 					}
 				}
+			}
+
+			// 检查是否是超时错误
+			if taskCtx.Err() == context.DeadlineExceeded && execErr == nil {
+				execErr = fmt.Errorf("task execution timed out after %v", e.taskTimeout)
 			}
 
 			if execErr != nil {
@@ -427,6 +467,20 @@ func (e *Executor) GetStats() *ExecutorStats {
 		ActiveWorkers:    atomic.LoadInt32(&e.stats.ActiveWorkers),
 		IdleWorkers:      atomic.LoadInt32(&e.stats.IdleWorkers),
 	}
+}
+
+// GetTaskTimeout 获取当前的任务超时配置
+func (e *Executor) GetTaskTimeout() time.Duration {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.taskTimeout
+}
+
+// SetTaskTimeout 动态更新任务超时配置
+func (e *Executor) SetTaskTimeout(timeout time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.taskTimeout = timeout
 }
 
 func (w *Worker) IsBusy() bool {
