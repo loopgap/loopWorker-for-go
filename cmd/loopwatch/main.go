@@ -111,51 +111,40 @@ var rootCmd = &cobra.Command{
 }
 
 func showHealthStatus(server string) error {
-	// TODO: Implement API call to get health status
-	health := HealthStatus{
-		Status: "healthy",
-		Uptime: "24h",
-		Components: map[string]string{
-			"scheduler": "healthy",
-			"executor":  "healthy",
-			"sandbox":   "healthy",
-			"event_bus": "healthy",
-		},
+	c := NewAPIClient(server)
+	health, err := c.HealthCheck()
+	if err != nil {
+		return fmt.Errorf("get health: %w", err)
 	}
 
 	fmt.Println("=== Health Status ===")
-	fmt.Printf("Status: %s\n", health.Status)
-	fmt.Printf("Uptime: %s\n", health.Uptime)
-	fmt.Println("Components:")
-	for name, status := range health.Components {
-		fmt.Printf("  %s: %s\n", name, status)
+	if status, ok := health["status"]; ok {
+		fmt.Printf("Status: %v\n", status)
+	}
+	if uptime, ok := health["uptime"]; ok {
+		fmt.Printf("Uptime: %v\n", uptime)
+	}
+	if components, ok := health["components"].(map[string]interface{}); ok {
+		fmt.Println("Components:")
+		for name, status := range components {
+			fmt.Printf("  %s: %v\n", name, status)
+		}
 	}
 
 	return nil
 }
 
 func showMetricsData(server string) error {
-	// TODO: Implement API call to get metrics
-	metrics := Metrics{
-		TasksCreated:   1000,
-		TasksCompleted: 950,
-		TasksFailed:    50,
-		ActiveWorkers:  4,
-		IdleWorkers:    2,
-		QueueSize:      10,
-		AvgExecTime:    "1.2s",
-		TasksPerSecond: 10.5,
+	c := NewAPIClient(server)
+	metrics, err := c.GetMetrics()
+	if err != nil {
+		return fmt.Errorf("get metrics: %w", err)
 	}
 
 	fmt.Println("=== Metrics ===")
-	fmt.Printf("Tasks Created:    %d\n", metrics.TasksCreated)
-	fmt.Printf("Tasks Completed:  %d\n", metrics.TasksCompleted)
-	fmt.Printf("Tasks Failed:     %d\n", metrics.TasksFailed)
-	fmt.Printf("Active Workers:   %d\n", metrics.ActiveWorkers)
-	fmt.Printf("Idle Workers:     %d\n", metrics.IdleWorkers)
-	fmt.Printf("Queue Size:       %d\n", metrics.QueueSize)
-	fmt.Printf("Avg Exec Time:    %s\n", metrics.AvgExecTime)
-	fmt.Printf("Tasks/Second:     %.2f\n", metrics.TasksPerSecond)
+	for key, value := range metrics {
+		fmt.Printf("  %s: %v\n", key, value)
+	}
 
 	return nil
 }
