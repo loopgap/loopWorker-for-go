@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"loopworker/pkg/logger"
 	"loopworker/pkg/event"
+	"go.uber.org/zap"
 )
 
 // ---- heap-based priority queue ----
@@ -123,6 +125,7 @@ type Scheduler struct {
 	mu           sync.RWMutex
 	taskNotifyCh chan struct{}
 	db           *gorm.DB // Using GORM
+	logger       *zap.Logger
 }
 
 func NewScheduler(eventBus *event.EventBus) *Scheduler {
@@ -144,6 +147,7 @@ func NewScheduler(eventBus *event.EventBus) *Scheduler {
 		eventBus:     eventBus,
 		queue:        q,
 		taskNotifyCh: make(chan struct{}, 1),
+		logger:       logger.Named("scheduler"),
 		db:           db,
 	}
 
