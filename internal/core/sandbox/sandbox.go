@@ -15,7 +15,9 @@ import (
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 
 	"loopworker/pkg/event"
+	"loopworker/pkg/logger"
 	"loopworker/pkg/skill"
+	"go.uber.org/zap"
 	"loopworker/pkg/utils"
 )
 
@@ -53,6 +55,7 @@ type Sandbox struct {
 	eventBus   *event.EventBus
 	mu         sync.RWMutex
 	runtime    wazero.Runtime
+	logger     *zap.Logger
 }
 
 func NewSandbox(config SandboxConfig) *Sandbox {
@@ -175,6 +178,7 @@ func NewSandbox(config SandboxConfig) *Sandbox {
 		plugins:    make(map[string]Plugin),
 		pluginSems: make(map[string]chan struct{}),
 		runtime:    r,
+		logger:     logger.Named("sandbox"),
 	}
 }
 
