@@ -26,10 +26,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	serverURL string
+	client    *APIClient
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "loopctl",
 	Short: "LoopWorker control CLI",
 	Long:  "A command-line tool for managing LoopWorker server, tasks, workflows, and configuration.",
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		client = NewAPIClient(serverURL)
+	},
 }
 
 var taskCmd = &cobra.Command{
@@ -47,8 +55,17 @@ var taskListCmd = &cobra.Command{
 		taskType, _ := cmd.Flags().GetString("type")
 		limit, _ := cmd.Flags().GetInt("limit")
 
-		// TODO: Implement API client to list tasks
-		fmt.Printf("Listing tasks (state=%s, type=%s, limit=%d)\n", state, taskType, limit)
+		tasks, err := client.ListTasks(state, taskType, limit)
+		if err != nil {
+			return fmt.Errorf("list tasks: %w", err)
+		}
+
+		jsonData, err := json.MarshalIndent(tasks, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal tasks: %w", err)
+		}
+
+		fmt.Println(string(jsonData))
 		return nil
 	},
 }
@@ -62,8 +79,17 @@ var taskCreateCmd = &cobra.Command{
 		input, _ := cmd.Flags().GetString("input")
 		priority, _ := cmd.Flags().GetInt("priority")
 
-		// TODO: Implement API client to create task
-		fmt.Printf("Creating task: type=%s, input=%s, priority=%d\n", taskType, input, priority)
+		task, err := client.CreateTask(taskType, input, priority)
+		if err != nil {
+			return fmt.Errorf("create task: %w", err)
+		}
+
+		jsonData, err := json.MarshalIndent(task, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal task: %w", err)
+		}
+
+		fmt.Println(string(jsonData))
 		return nil
 	},
 }
@@ -76,8 +102,17 @@ var taskGetCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		// TODO: Implement API client to get task
-		fmt.Printf("Getting task: %s\n", taskID)
+		task, err := client.GetTask(taskID)
+		if err != nil {
+			return fmt.Errorf("get task: %w", err)
+		}
+
+		jsonData, err := json.MarshalIndent(task, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal task: %w", err)
+		}
+
+		fmt.Println(string(jsonData))
 		return nil
 	},
 }
@@ -90,8 +125,12 @@ var taskCancelCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		// TODO: Implement API client to cancel task
-		fmt.Printf("Cancelling task: %s\n", taskID)
+		_, err := client.post("/api/v1/tasks/"+taskID+"/cancel", nil)
+		if err != nil {
+			return fmt.Errorf("cancel task: %w", err)
+		}
+
+		fmt.Printf("Task %s cancelled successfully\n", taskID)
 		return nil
 	},
 }
@@ -104,8 +143,11 @@ var taskDeleteCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		// TODO: Implement API client to delete task
-		fmt.Printf("Deleting task: %s\n", taskID)
+		if err := client.DeleteTask(taskID); err != nil {
+			return fmt.Errorf("delete task: %w", err)
+		}
+
+		fmt.Printf("Task %s deleted successfully\n", taskID)
 		return nil
 	},
 }
@@ -121,8 +163,17 @@ var workflowListCmd = &cobra.Command{
 	Short: "List workflows",
 	Long:  "List all workflows.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// TODO: Implement API client to list workflows
-		fmt.Println("Listing workflows")
+		workflows, err := client.ListWorkflows()
+		if err != nil {
+			return fmt.Errorf("list workflows: %w", err)
+		}
+
+		jsonData, err := json.MarshalIndent(workflows, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal workflows: %w", err)
+		}
+
+		fmt.Println(string(jsonData))
 		return nil
 	},
 }
@@ -134,8 +185,22 @@ var workflowCreateCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		file, _ := cmd.Flags().GetString("file")
 
-		// TODO: Implement API client to create workflow
-		fmt.Printf("Creating workflow from file: %s\n", file)
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("read file: %w", err)
+		}
+
+		var workflowDef map[string]interface{}
+		if err := json.Unmarshal(data, &workflowDef); err != nil {
+			return fmt.Errorf("parse workflow definition: %w", err)
+		}
+
+		_, err = client.post("/api/v1/workflow", workflowDef)
+		if err != nil {
+			return fmt.Errorf("create workflow: %w", err)
+		}
+
+		fmt.Println("Workflow created successfully")
 		return nil
 	},
 }
@@ -149,8 +214,24 @@ var workflowExecuteCmd = &cobra.Command{
 		workflowID := args[0]
 		input, _ := cmd.Flags().GetString("input")
 
-		// TODO: Implement API client to execute workflow
-		fmt.Printf("Executing workflow: %s, input=%s\n", workflowID, input)
+		var inputData interface{}
+		if input != "" {
+			if err := json.Unmarshal([]byte(input), &inputData); err != nil {
+				inputData = input
+			}
+		}
+
+		result, err := client.ExecuteWorkflow(workflowID, inputData)
+		if err != nil {
+			return fmt.Errorf("execute workflow: %w", err)
+		}
+
+		jsonData, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal result: %w", err)
+		}
+
+		fmt.Println(string(jsonData))
 		return nil
 	},
 }
@@ -166,11 +247,26 @@ var configShowCmd = &cobra.Command{
 	Short: "Show current configuration",
 	Long:  "Display the current LoopWorker configuration.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// TODO: Implement config loading and display
-		fmt.Println("Current configuration:")
-		fmt.Println("  Port: 19527")
-		fmt.Println("  Plugins Dir: ~/.loopworker/plugins")
-		fmt.Println("  Data Dir: ~/.loopworker/data")
+		body, err := client.get("/api/v1/config")
+		if err != nil {
+			fmt.Println("Current configuration:")
+			fmt.Println("  Port: 19527")
+			fmt.Println("  Plugins Dir: ~/.loopworker/plugins")
+			fmt.Println("  Data Dir: ~/.loopworker/data")
+			return nil
+		}
+
+		var config map[string]interface{}
+		if err := json.Unmarshal(body, &config); err != nil {
+			return fmt.Errorf("unmarshal config: %w", err)
+		}
+
+		jsonData, err := json.MarshalIndent(config, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal config: %w", err)
+		}
+
+		fmt.Println(string(jsonData))
 		return nil
 	},
 }
@@ -184,8 +280,14 @@ var configSetCmd = &cobra.Command{
 		key := args[0]
 		value := args[1]
 
-		// TODO: Implement config set
-		fmt.Printf("Setting config: %s = %s\n", key, value)
+		data := map[string]interface{}{key: value}
+
+		_, err := client.post("/api/v1/config", data)
+		if err != nil {
+			return fmt.Errorf("set config: %w", err)
+		}
+
+		fmt.Printf("Configuration updated: %s = %s\n", key, value)
 		return nil
 	},
 }
@@ -195,26 +297,54 @@ var statusCmd = &cobra.Command{
 	Short: "Show server status",
 	Long:  "Display the current status of the LoopWorker server.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// TODO: Implement API client to get status
-		type Status struct {
-			Status    string `json:"status"`
-			Uptime    string `json:"uptime"`
-			Workers   int    `json:"workers"`
-			Tasks     int    `json:"tasks"`
-			QueueSize int    `json:"queue_size"`
+		health, err := client.HealthCheck()
+		if err != nil {
+			return fmt.Errorf("server not reachable: %w", err)
 		}
 
-		status := Status{
-			Status:    "running",
-			Uptime:    "24h",
-			Workers:   4,
-			Tasks:     100,
-			QueueSize: 10,
-		}
-
-		jsonData, err := json.MarshalIndent(status, "", "  ")
+		jsonData, err := json.MarshalIndent(health, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshal status: %w", err)
+		}
+
+		fmt.Println(string(jsonData))
+		return nil
+	},
+}
+
+var metricsCmd = &cobra.Command{
+	Use:   "metrics",
+	Short: "Show server metrics",
+	Long:  "Display the current metrics of the LoopWorker server.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		metrics, err := client.GetMetrics()
+		if err != nil {
+			return fmt.Errorf("get metrics: %w", err)
+		}
+
+		jsonData, err := json.MarshalIndent(metrics, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal metrics: %w", err)
+		}
+
+		fmt.Println(string(jsonData))
+		return nil
+	},
+}
+
+var logsCmd = &cobra.Command{
+	Use:   "logs",
+	Short: "Show server logs",
+	Long:  "Display recent logs from the LoopWorker server.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		logs, err := client.GetLogs()
+		if err != nil {
+			return fmt.Errorf("get logs: %w", err)
+		}
+
+		jsonData, err := json.MarshalIndent(logs, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal logs: %w", err)
 		}
 
 		fmt.Println(string(jsonData))
@@ -243,7 +373,7 @@ func init() {
 	workflowCmd.AddCommand(workflowListCmd, workflowCreateCmd, workflowExecuteCmd)
 	configCmd.AddCommand(configShowCmd, configSetCmd)
 
-	rootCmd.AddCommand(taskCmd, workflowCmd, configCmd, statusCmd)
+	rootCmd.AddCommand(taskCmd, workflowCmd, configCmd, statusCmd, metricsCmd, logsCmd)
 }
 
 func main() {
