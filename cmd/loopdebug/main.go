@@ -26,6 +26,7 @@ import (
 	"github.com/spf13/cobra"
 
 	lwclient "loopworker/pkg/client"
+	"loopworker/version"
 )
 
 var (
@@ -334,6 +335,14 @@ func init() {
 	profileCmd.Flags().StringP("output", "o", "", "Output file for profile")
 
 	rootCmd.AddCommand(taskCmd, workflowCmd, diagnoseCmd, profileCmd)
+
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(version.Get().String())
+		},
+	})
 }
 
 func main() {

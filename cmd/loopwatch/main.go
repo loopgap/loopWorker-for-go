@@ -25,6 +25,7 @@ import (
 	"github.com/spf13/cobra"
 
 	lwclient "loopworker/pkg/client"
+	"loopworker/version"
 )
 
 type Metrics struct {
@@ -170,6 +171,14 @@ func showLogsData(server string) error {
 }
 
 func init() {
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(version.Get().String())
+		},
+	})
+
 	rootCmd.Flags().StringP("server", "s", "http://localhost:19527", "Server URL")
 	rootCmd.Flags().DurationP("interval", "i", 5*time.Second, "Refresh interval")
 	rootCmd.Flags().BoolP("metrics", "m", false, "Show metrics")

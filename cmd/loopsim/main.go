@@ -28,6 +28,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"loopworker/version"
 )
 
 type SimulationResult struct {
@@ -304,6 +306,14 @@ func saveResult(result *SimulationResult, filename string) error {
 }
 
 func init() {
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(version.Get().String())
+		},
+	})
+
 	rootCmd.Flags().DurationP("duration", "d", 30*time.Second, "Simulation duration")
 	rootCmd.Flags().IntP("concurrency", "c", 4, "Number of concurrent workers")
 	rootCmd.Flags().IntP("rate", "r", 10, "Tasks per second")

@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"loopworker/version"
 )
 
 type BenchmarkResult struct {
@@ -201,6 +203,14 @@ func saveResult(result *BenchmarkResult, filename string) error {
 }
 
 func init() {
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(version.Get().String())
+		},
+	})
+
 	rootCmd.Flags().DurationP("duration", "d", 10*time.Second, "Benchmark duration")
 	rootCmd.Flags().IntP("concurrency", "c", 4, "Number of concurrent workers")
 	rootCmd.Flags().IntP("tasks", "n", 100, "Number of tasks to execute")
