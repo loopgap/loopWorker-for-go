@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"loopworker/pkg/errors"
 	"os"
 	"strconv"
 )
@@ -121,11 +122,11 @@ func (c *Config) Validate() error {
 	}
 
 	if c.PluginsDir == "" {
-		return fmt.Errorf("plugins_dir cannot be empty")
+		return errors.ErrConfigInvalid
 	}
 
 	if c.DataDir == "" {
-		return fmt.Errorf("data_dir cannot be empty")
+		return errors.ErrConfigInvalid
 	}
 
 	validLogLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}

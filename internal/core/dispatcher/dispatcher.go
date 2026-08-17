@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"loopworker/internal/core/scheduler"
+	"loopworker/pkg/errors"
 	"loopworker/pkg/event"
 )
 
@@ -109,14 +110,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context) (*scheduler.Task, *WorkerInfo
 	d.mu.Unlock()
 
 	if worker == nil {
-		return nil, nil, fmt.Errorf("no available workers")
+		return nil, nil, errors.ErrWorkerNotFound
 	}
 
 	task := d.provider.DequeueTask()
 	if task == nil {
 		// No tasks, release the worker
 		d.MarkWorkerFree(worker.ID)
-		return nil, nil, fmt.Errorf("no tasks in queue")
+		return nil, nil, errors.ErrQueueEmpty
 	}
 
 	if err := d.provider.StartTask(ctx, task.ID, worker.ID); err != nil {

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"loopworker/pkg/errors"
 )
 
 type Permission string
@@ -128,12 +130,12 @@ func (sm *SecurityManager) Authenticate(username, password string) (*Token, erro
 
 	if user == nil {
 		sm.recordAudit("", "authenticate", "auth", false, "")
-		return nil, fmt.Errorf("user not found")
+		return nil, errors.ErrUserNotFound
 	}
 
 	if !CheckPassword(password, user.PasswordHash) {
 		sm.recordAudit(user.ID, "authenticate", "auth", false, "")
-		return nil, fmt.Errorf("invalid password")
+		return nil, errors.ErrInvalidPassword
 	}
 
 	now := time.Now()
@@ -157,16 +159,16 @@ func (sm *SecurityManager) ValidateToken(tokenValue string) (*User, error) {
 
 	token, ok := sm.tokens[tokenValue]
 	if !ok {
-		return nil, fmt.Errorf("token not found")
+		return nil, errors.ErrTokenInvalid
 	}
 
 	if time.Now().After(token.ExpiresAt) {
-		return nil, fmt.Errorf("token expired")
+		return nil, errors.ErrTokenExpired
 	}
 
 	user, ok := sm.users[token.UserID]
 	if !ok {
-		return nil, fmt.Errorf("user not found")
+		return nil, errors.ErrUserNotFound
 	}
 
 	return user, nil

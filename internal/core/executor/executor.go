@@ -12,6 +12,7 @@ import (
 	"loopworker/internal/core/scheduler"
 	"loopworker/internal/core/selfheal"
 	"loopworker/pkg/event"
+	"loopworker/pkg/errors"
 	"loopworker/pkg/logger"
 	"loopworker/pkg/skill"
 	"go.uber.org/zap"
@@ -300,7 +301,7 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 					e.llmCircuitBreaker = e.selfHealer.GetCircuitBreaker("llm")
 				}
 				if e.llmCircuitBreaker != nil && !e.llmCircuitBreaker.AllowRequest() {
-					execErr = fmt.Errorf("circuit breaker open: LLM temporarily unavailable")
+					execErr = errors.ErrCircuitOpen
 				} else {
 					// LLM调用超时独立设置，但受全局任务超时约束
 					llmTimeout := 30 * time.Second
@@ -326,7 +327,7 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 					execErr = e.selfHealer.ExecuteWithRecovery(taskCtx, worker.PluginID, func(innerCtx context.Context) error {
 						plugins := e.sandbox.ListPlugins()
 						if len(plugins) == 0 {
-							return fmt.Errorf("no plugins available")
+							return errors.ErrPluginNotFound
 						}
 						var err error
 						skillCtx := e.getSkillContext()
@@ -351,7 +352,7 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 				} else {
 					plugins := e.sandbox.ListPlugins()
 					if len(plugins) == 0 {
-						execErr = fmt.Errorf("no plugins available")
+						execErr = errors.ErrPluginNotFound
 					} else {
 						skillCtx := e.getSkillContext()
 						output, execErr = e.sandbox.Execute(taskCtx, worker.PluginID, task.Input, skillCtx)
