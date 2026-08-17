@@ -175,7 +175,10 @@ func (e *Executor) StartWorker(ctx context.Context, workerID, pluginID string) e
 			WorkerID: workerID,
 			PluginID: pluginID,
 		}, nil)
-		_ = e.eventBus.Publish(ctx, evt)
+		if err := e.eventBus.Publish(ctx, evt); err != nil {
+			// 记录错误但不阻塞worker启动
+			fmt.Printf("Warning: failed to publish worker spawned event: %v\n", err)
+		}
 	}
 
 	e.notifyWorkerFree()
@@ -205,7 +208,10 @@ func (e *Executor) StopWorker(ctx context.Context, workerID string) error {
 			WorkerID: workerID,
 			ExitCode: 0,
 		}, nil)
-		_ = e.eventBus.Publish(ctx, evt)
+		if err := e.eventBus.Publish(ctx, evt); err != nil {
+			// 记录错误但不阻塞worker停止
+			fmt.Printf("Warning: failed to publish worker exited event: %v\n", err)
+		}
 	}
 
 	return e.dispatcher.UnregisterWorker(ctx, workerID)
@@ -326,11 +332,14 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 						// Publish skill invoked event when LLM skill is available
 						if err == nil && skillCtx.Bus != nil && skillCtx.Config != nil {
 							if llmClient, ok := skillCtx.Config["llm"].(interface{}); ok && llmClient != nil {
-								_ = skillCtx.Bus.Publish(ctx, event.NewEvent(event.EventSkillInvoked, event.SkillInvokedPayload{
+								if publishErr := skillCtx.Bus.Publish(ctx, event.NewEvent(event.EventSkillInvoked, event.SkillInvokedPayload{
 									SkillName: "llm.chat",
 									TaskID:    task.ID,
 									Success:   true,
-								}, nil))
+								}, nil)); publishErr != nil {
+									// 记录错误但不阻塞执行
+									fmt.Printf("Warning: failed to publish skill invoked event: %v\n", publishErr)
+								}
 							}
 						}
 
@@ -364,11 +373,17 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 			}
 
 			if execErr != nil {
-				_ = e.dispatcher.FailTask(ctx, task.ID, worker.ID, execErr.Error())
+				if err := e.dispatcher.FailTask(ctx, task.ID, worker.ID, execErr.Error()); err != nil {
+					// 记录错误但不阻塞执行
+					fmt.Printf("Warning: failed to fail task %s: %v\n", task.ID, err)
+				}
 				atomic.AddInt64(&e.stats.TotalTasksFailed, 1)
 				atomic.AddInt64(&worker.tasksFailed, 1)
 			} else {
-				_ = e.dispatcher.CompleteTask(ctx, task.ID, worker.ID, output)
+				if err := e.dispatcher.CompleteTask(ctx, task.ID, worker.ID, output); err != nil {
+					// 记录错误但不阻塞执行
+					fmt.Printf("Warning: failed to complete task %s: %v\n", task.ID, err)
+				}
 			}
 
 			elapsed := time.Since(start)
@@ -536,14 +551,23 @@ func (e *Executor) sweepZombies(ctx context.Context) {
 
 	for i, id := range zombies {
 		fmt.Printf("[Watchdog] Worker %s is a zombie, forcefully terminating it\n", id)
-		_ = e.StopWorker(ctx, id)
+		if err := e.StopWorker(ctx, id); err != nil {
+			// 记录错误但不阻塞watchdog
+			fmt.Printf("Warning: failed to stop zombie worker %s: %v\n", id, err)
+		}
 
 		// DeadLetter queue logic: mark the task as failed with Zombie status
 		if currentTasks[i] != "" {
-			_ = e.dispatcher.FailTask(ctx, currentTasks[i], id, "zombie task forcefully terminated by watchdog")
+			if err := e.dispatcher.FailTask(ctx, currentTasks[i], id, "zombie task forcefully terminated by watchdog"); err != nil {
+				// 记录错误但不阻塞watchdog
+				fmt.Printf("Warning: failed to fail task %s: %v\n", currentTasks[i], err)
+			}
 		}
 
 		// Respawn the worker to maintain the pool
-		_ = e.StartWorker(ctx, id+"-reborn", "default")
+		if err := e.StartWorker(ctx, id+"-reborn", "default"); err != nil {
+			// 记录错误但不阻塞watchdog
+			fmt.Printf("Warning: failed to respawn worker %s: %v\n", id+"-reborn", err)
+		}
 	}
 }

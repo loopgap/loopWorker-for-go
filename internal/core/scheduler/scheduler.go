@@ -268,7 +268,10 @@ func (s *Scheduler) CreateTask(ctx context.Context, taskType string, config map[
 			TaskType: taskType,
 			Config:   config,
 		}, nil)
-		_ = s.eventBus.Publish(ctx, createEvent)
+		if err := s.eventBus.Publish(ctx, createEvent); err != nil {
+			// 记录错误但不阻塞任务创建
+			fmt.Printf("Warning: failed to publish task created event: %v\n", err)
+		}
 	}
 
 	return task, nil
@@ -387,7 +390,10 @@ func (s *Scheduler) StartTask(ctx context.Context, taskID, workerID string) erro
 			TaskID:   taskID,
 			WorkerID: workerID,
 		}, nil)
-		_ = s.eventBus.Publish(ctx, startEvent)
+		if err := s.eventBus.Publish(ctx, startEvent); err != nil {
+			// 记录错误但不阻塞任务启动
+			fmt.Printf("Warning: failed to publish task started event: %v\n", err)
+		}
 	}
 
 	return nil
@@ -420,7 +426,10 @@ func (s *Scheduler) CompleteTask(ctx context.Context, taskID, workerID string, r
 			Duration: now.Sub(*task.StartedAt),
 			Result:   result,
 		}, nil)
-		_ = s.eventBus.Publish(ctx, completeEvent)
+		if err := s.eventBus.Publish(ctx, completeEvent); err != nil {
+			// 记录错误但不阻塞任务完成
+			fmt.Printf("Warning: failed to publish task completed event: %v\n", err)
+		}
 	}
 
 	s.unblockDependents(ctx, taskID)
@@ -476,7 +485,10 @@ func (s *Scheduler) FailTask(ctx context.Context, taskID, workerID, errMsg strin
 				Error:    errMsg,
 				Retry:    task.Retry,
 			}, nil)
-			_ = s.eventBus.Publish(ctx, retryEvent)
+			if err := s.eventBus.Publish(ctx, retryEvent); err != nil {
+				// 记录错误但不阻塞任务重试
+				fmt.Printf("Warning: failed to publish task retried event: %v\n", err)
+			}
 		}
 		s.insertByPriority(task)
 	} else {
@@ -493,7 +505,10 @@ func (s *Scheduler) FailTask(ctx context.Context, taskID, workerID, errMsg strin
 				Error:    errMsg,
 				Retry:    task.Retry,
 			}, nil)
-			_ = s.eventBus.Publish(ctx, failEvent)
+			if err := s.eventBus.Publish(ctx, failEvent); err != nil {
+				// 记录错误但不阻塞任务失败
+				fmt.Printf("Warning: failed to publish task failed event: %v\n", err)
+			}
 		}
 	}
 
@@ -522,7 +537,10 @@ func (s *Scheduler) CancelTask(ctx context.Context, taskID string) error {
 
 	if s.eventBus != nil {
 		cancelEvent := event.NewEvent(event.EventTaskCancelled, nil, map[string]string{"task_id": taskID})
-		_ = s.eventBus.Publish(ctx, cancelEvent)
+		if err := s.eventBus.Publish(ctx, cancelEvent); err != nil {
+			// 记录错误但不阻塞任务取消
+			fmt.Printf("Warning: failed to publish task cancelled event: %v\n", err)
+		}
 	}
 
 	return nil

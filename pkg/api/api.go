@@ -524,7 +524,12 @@ func (s *APIServer) streamEventsLive(w http.ResponseWriter, r *http.Request) {
 			if payloadMap, ok := evt.Payload().(map[string]interface{}); ok {
 				if taskID, ok := payloadMap["task_id"].(string); ok {
 					if t, exists := s.scheduler.GetTask(taskID); exists {
-						taskData, _ = json.Marshal(t)
+						var marshalErr error
+						taskData, marshalErr = json.Marshal(t)
+						if marshalErr != nil {
+							// 记录错误但不阻塞响应
+							fmt.Printf("Warning: failed to marshal task: %v\n", marshalErr)
+						}
 					}
 				}
 			}
@@ -600,7 +605,10 @@ func (s *APIServer) executeWorkflow(w http.ResponseWriter, r *http.Request) {
 		if s.wfe == nil {
 			return
 		}
-		_ = s.wfe.Execute(ctx, data.WorkflowID)
+		if err := s.wfe.Execute(ctx, data.WorkflowID); err != nil {
+			sendError(w, r, err, http.StatusInternalServerError)
+			return
+		}
 	})
 
 	sendSuccess(w, r, map[string]interface{}{

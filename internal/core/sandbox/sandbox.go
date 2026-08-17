@@ -253,13 +253,16 @@ func (s *Sandbox) Execute(ctx context.Context, pluginName string, input []byte, 
 		s.mu.Unlock()
 
 		if s.eventBus != nil {
-			_ = s.eventBus.Publish(ctx, event.NewEvent(event.EventPluginExecuted, event.PluginExecutedPayload{
+			if publishErr := s.eventBus.Publish(ctx, event.NewEvent(event.EventPluginExecuted, event.PluginExecutedPayload{
 				PluginID:  pluginName,
 				Duration:  time.Since(start),
 				Success:   false,
 				Error:     fmt.Sprintf("timeout after %d seconds", s.config.MaxCPUSeconds),
 				InputSize: len(input),
-			}, nil))
+			}, nil)); publishErr != nil {
+				// 记录错误但不阻塞执行
+				fmt.Printf("Warning: failed to publish plugin executed event: %v\n", publishErr)
+			}
 		}
 
 		return nil, fmt.Errorf("execution timeout after %d seconds", s.config.MaxCPUSeconds)
@@ -277,13 +280,16 @@ func (s *Sandbox) Execute(ctx context.Context, pluginName string, input []byte, 
 			s.mu.Unlock()
 
 			if s.eventBus != nil {
-				_ = s.eventBus.Publish(ctx, event.NewEvent(event.EventPluginExecuted, event.PluginExecutedPayload{
+				if publishErr := s.eventBus.Publish(ctx, event.NewEvent(event.EventPluginExecuted, event.PluginExecutedPayload{
 					PluginID:  pluginName,
 					Duration:  elapsed,
 					Success:   false,
 					Error:     res.err.Error(),
 					InputSize: len(input),
-				}, nil))
+				}, nil)); publishErr != nil {
+					// 记录错误但不阻塞执行
+					fmt.Printf("Warning: failed to publish plugin executed event: %v\n", publishErr)
+				}
 			}
 
 			return nil, fmt.Errorf("plugin execution failed: %w", res.err)
@@ -310,13 +316,16 @@ func (s *Sandbox) Execute(ctx context.Context, pluginName string, input []byte, 
 		s.mu.Unlock()
 
 		if s.eventBus != nil {
-			_ = s.eventBus.Publish(ctx, event.NewEvent(event.EventPluginExecuted, event.PluginExecutedPayload{
+			if publishErr := s.eventBus.Publish(ctx, event.NewEvent(event.EventPluginExecuted, event.PluginExecutedPayload{
 				PluginID:   pluginName,
 				Duration:   elapsed,
 				Success:    true,
 				InputSize:  len(input),
 				OutputSize: len(res.output),
-			}, nil))
+			}, nil)); publishErr != nil {
+				// 记录错误但不阻塞执行
+				fmt.Printf("Warning: failed to publish plugin executed event: %v\n", publishErr)
+			}
 		}
 
 		return res.output, nil

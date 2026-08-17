@@ -57,7 +57,10 @@ func (d *Dispatcher) RegisterWorker(ctx context.Context, workerID, pluginID stri
 			WorkerID: workerID,
 			PluginID: pluginID,
 		}, nil)
-		_ = d.eventBus.Publish(ctx, spawnEvent)
+		if err := d.eventBus.Publish(ctx, spawnEvent); err != nil {
+			// 记录错误但不阻塞注册
+			fmt.Printf("Warning: failed to publish worker spawned event: %v\n", err)
+		}
 	}
 
 	return nil
@@ -83,7 +86,10 @@ func (d *Dispatcher) UnregisterWorker(ctx context.Context, workerID string) erro
 			WorkerID: workerID,
 			ExitCode: 0,
 		}, nil)
-		_ = d.eventBus.Publish(ctx, exitEvent)
+		if err := d.eventBus.Publish(ctx, exitEvent); err != nil {
+			// 记录错误但不阻塞注销
+			fmt.Printf("Warning: failed to publish worker exited event: %v\n", err)
+		}
 	}
 
 	return nil
@@ -113,7 +119,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context) (*scheduler.Task, *WorkerInfo
 		return nil, nil, fmt.Errorf("no tasks in queue")
 	}
 
-	_ = d.provider.StartTask(ctx, task.ID, worker.ID)
+	if err := d.provider.StartTask(ctx, task.ID, worker.ID); err != nil {
+		// 记录错误但不阻塞分发
+		fmt.Printf("Warning: failed to start task %s: %v\n", task.ID, err)
+	}
 
 	return task, worker, nil
 }
