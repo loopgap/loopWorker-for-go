@@ -13,6 +13,7 @@ import (
 	"loopworker/internal/config"
 	"loopworker/pkg/server"
 	"loopworker/pkg/utils"
+	"loopworker/version"
 )
 
 var cfgFile string
@@ -59,6 +60,14 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	cobra.OnInitialize(initConfig)
+
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(version.Get().String())
+		},
+	})
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.loopworker/config.yaml)")
 	rootCmd.Flags().IntP("port", "p", 19527, "Port to run the server on")

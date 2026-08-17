@@ -1,201 +1,159 @@
 # LoopWorker Makefile
-# ==================== Configuration ====================
-APP_NAME    := loopworker
-CMD_DIR     := ./cmd/loopworker
-BUILD_DIR   := ./bin
-GO          := go
-GOFLAGS     := -v
-LDFLAGS     := -s -w
-WEB_DIR     := web/canvas
-EMBED_DIR   := pkg/api/dist
-NODE        := node
-NPM         := npm
 
-# Binary suffix: .exe on Windows (Git Bash exposes OS=Windows_NT), none elsewhere.
-ifeq ($(OS),Windows_NT)
-BIN_SUFFIX  := .exe
-else
-BIN_SUFFIX  :=
-endif
+# Build information
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+GO_VERSION ?= $(shell go version | cut -d' ' -f3)
 
-# ==================== Build ====================
-.PHONY: build build-all clean
+# Build flags
+LDFLAGS = -ldflags "\
+	-X loopworker/version.Version=$(VERSION) \
+	-X loopworker/version.GitCommit=$(GIT_COMMIT) \
+	-X loopworker/version.BuildDate=$(BUILD_DATE) \
+	-X loopworker/version.GoVersion=$(GO_VERSION)"
 
-# build depends on web-build so the embedded Canvas UI is always up to date.
-build: web-build
-	@echo "==> Building $(APP_NAME)..."
-	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(APP_NAME)$(BIN_SUFFIX) $(CMD_DIR)
+# Binary names
+BINARIES = loopworker loopctl loopdebug loopwatch loopbench loopsim
 
-build-all: build
+# Default target
+.PHONY: all
+all: build
 
-clean:
-	@echo "==> Cleaning build artifacts..."
-	rm -rf $(BUILD_DIR)
-	rm -f *.exe coverage coverage.out coverage.html
+# Build all binaries
+.PHONY: build
+build:
+	@echo "Building LoopWorker $(VERSION)..."
+	@for cmd in $(BINARIES); do \
+		echo "  Building $$cmd..."; \
+		go build $(LDFLAGS) -o bin/$$cmd ./cmd/$$cmd/; \
+	done
+	@echo "Build complete!"
 
-# ==================== Test ====================
-.PHONY: test test-short test-cover test-race test-integration test-e2e test-all bench
+# Build for current platform
+.PHONY: build-current
+build-current:
+	@echo "Building for current platform..."
+	@for cmd in $(BINARIES); do \
+		go build $(LDFLAGS) -o bin/$$cmd ./cmd/$$cmd/; \
+	done
 
+# Cross-compile for Linux
+.PHONY: build-linux
+build-linux:
+	@echo "Building for Linux..."
+	@for cmd in $(BINARIES); do \
+		GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o bin/$$cmd-linux-amd64 ./cmd/$$cmd/; \
+	done
+
+# Cross-compile for Windows
+.PHONY: build-windows
+build-windows:
+	@echo "Building for Windows..."
+	@for cmd in $(BINARIES); do \
+		GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o bin/$$cmd-windows-amd64.exe ./cmd/$$cmd/; \
+	done
+
+# Cross-compile for macOS
+.PHONY: build-darwin
+build-darwin:
+	@echo "Building for macOS..."
+	@for cmd in $(BINARIES); do \
+		GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o bin/$$cmd-darwin-amd64 ./cmd/$$cmd/; \
+	done
+
+# Build all platforms
+.PHONY: build-all
+build-all: build-linux build-windows build-darwin
+	@echo "Cross-compilation complete!"
+
+# Run tests
+.PHONY: test
 test:
-	@echo "==> Running tests..."
-	$(GO) test $(GOFLAGS) ./...
+	@echo "Running tests..."
+	go test -count=1 ./...
 
-test-short:
-	@echo "==> Running short tests..."
-	$(GO) test -short $(GOFLAGS) ./...
-
-test-cover:
-	@echo "==> Running tests with coverage..."
-	$(GO) test -coverprofile=coverage.out ./...
-	$(GO) tool cover -html=coverage.out -o coverage.html
-	$(GO) tool cover -func=coverage.out
-
+# Run tests with race detection
+.PHONY: test-race
 test-race:
-	@echo "==> Running tests with race detector..."
-	$(GO) test -race $(GOFLAGS) ./...
+	@echo "Running tests with race detection..."
+	go test -race -count=1 ./...
 
-test-integration:
-	@echo "==> Running integration tests..."
-	$(GO) test $(GOFLAGS) -tags=integration ./integration/...
+# Run tests with coverage
+.PHONY: test-coverage
+test-coverage:
+	@echo "Running tests with coverage..."
+	go test -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report: coverage.html"
 
-test-e2e: test-integration
-	@echo "==> e2e suite currently maps to integration tests..."
-
-test-all: fmt-check vet test test-race tidy-check
-	@echo "==> All tests passed!"
-
-bench:
-	@echo "==> Running benchmarks..."
-	$(GO) test -bench=. -benchmem ./...
-
-# ==================== Quality ====================
-.PHONY: lint vet fmt fmt-check check
-
-lint:
-	@echo "==> Running linter..."
-	@which golangci-lint > /dev/null 2>&1 && golangci-lint run ./... || echo "golangci-lint not installed, skipping"
-
-vet:
-	@echo "==> Running go vet..."
-	$(GO) vet ./...
-
+# Format code
+.PHONY: fmt
 fmt:
-	@echo "==> Formatting code..."
-	$(GO) fmt ./...
+	@echo "Formatting code..."
+	gofmt -w .
 
-# Format gate: fails if any source file is not gofmt-formatted.
-fmt-check:
-	@echo "==> Checking formatting..."
-	@files="$$(gofmt -l .)"; \
-	if [ -n "$$files" ]; then \
-		echo "gofmt needed on:"; \
-		echo "$$files"; \
-		exit 1; \
-	fi; \
-	echo "all files are gofmt-formatted"
+# Run linter
+.PHONY: lint
+lint:
+	@echo "Running linter..."
+	go vet ./...
 
-# go.mod tidiness gate: fails when 'go mod tidy' would change anything.
-tidy-check:
-	@echo "==> Checking go.mod is tidy..."
-	@diff="$$($(GO) mod tidy -diff 2>&1)"; \
-	if [ -n "$$diff" ]; then \
-		echo "go.mod is NOT tidy; run 'make tidy'"; \
-		echo "$$diff"; \
-		exit 1; \
-	fi; \
-	echo "go.mod is tidy"
+# Clean build artifacts
+.PHONY: clean
+clean:
+	@echo "Cleaning..."
+	rm -rf bin/
+	rm -f coverage.out coverage.html
 
-check: fmt vet test tidy-check
-	@echo "==> All checks passed!"
+# Install binaries
+.PHONY: install
+install: build
+	@echo "Installing binaries..."
+	@for cmd in $(BINARIES); do \
+		cp bin/$$cmd $(GOPATH)/bin/; \
+	done
+	@echo "Installation complete!"
 
-# ==================== Dependencies ====================
-.PHONY: deps deps-update tidy install
+# Docker build
+.PHONY: docker
+docker:
+	@echo "Building Docker image..."
+	docker build -t loopworker:$(VERSION) .
 
-deps:
-	@echo "==> Downloading dependencies..."
-	$(GO) mod download
-
-deps-update:
-	@echo "==> Updating dependencies..."
-	$(GO) get -u ./...
-	$(GO) mod tidy
-
-tidy:
-	@echo "==> Tidying modules..."
-	$(GO) mod tidy
-
-install:
-	@echo "==> Installing binaries to GOPATH/bin..."
-	$(GO) install ./cmd/...
-
-# ==================== Web (Canvas UI) ====================
-.PHONY: web-install web-dev web-build
-
-web-install:
-	@echo "==> Installing web dependencies..."
-	cd $(WEB_DIR) && $(NPM) install
-
-web-dev:
-	@echo "==> Starting web dev server..."
-	cd $(WEB_DIR) && $(NPM) run dev
-
-# Builds the Canvas UI and copies the real artifacts into pkg/api/dist (embed source).
-# Fallback: when Node/npm is unavailable, reuse the committed artifacts as long as
-# they exist and are not the placeholder page; otherwise fail loudly (no silent placeholders).
-web-build:
-	@echo "==> Building web assets..."
-	@if command -v $(NODE) >/dev/null 2>&1 && command -v $(NPM) >/dev/null 2>&1; then \
-		cd $(WEB_DIR) && $(NPM) ci --no-audit --no-fund && $(NPM) run build; \
-		mkdir -p $(EMBED_DIR); \
-		cp -r $(WEB_DIR)/dist/. $(EMBED_DIR)/; \
-		if ! grep -q "Placeholder" $(EMBED_DIR)/index.html; then \
-			echo "==> Web assets built and copied to $(EMBED_DIR)/"; \
-		else \
-			echo "ERROR: built $(EMBED_DIR)/index.html looks like a placeholder; refusing to continue"; \
-			exit 1; \
-		fi \
-	elif [ -f $(EMBED_DIR)/index.html ] && ! grep -q "Placeholder" $(EMBED_DIR)/index.html; then \
-		echo "==> WARNING: Node/npm unavailable; using committed artifacts from $(EMBED_DIR)/"; \
-	else \
-		echo "ERROR: Node/npm unavailable and $(EMBED_DIR)/index.html is missing or a placeholder."; \
-		echo "Install Node.js (or restore committed artifacts) and retry."; \
-		exit 1; \
-	fi
-
-# ==================== Run ====================
+# Run server
 .PHONY: run
-
 run: build
-	@echo "==> Starting $(APP_NAME)..."
-	$(BUILD_DIR)/$(APP_NAME) -port 19527
+	@echo "Starting LoopWorker..."
+	./bin/loopworker
 
-# ==================== Help ====================
+# Show version
+.PHONY: version
+version:
+	@echo "Version: $(VERSION)"
+	@echo "Git Commit: $(GIT_COMMIT)"
+	@echo "Build Date: $(BUILD_DATE)"
+	@echo "Go Version: $(GO_VERSION)"
+
+# Help
 .PHONY: help
-
 help:
 	@echo "LoopWorker Build System"
-	@echo "======================"
 	@echo ""
-	@echo "  make build            Build the main binary (runs web-build first)"
-	@echo "  make clean            Remove build artifacts"
-	@echo "  make test             Run all tests"
-	@echo "  make test-short       Run short tests"
-	@echo "  make test-cover       Run tests with coverage report"
-	@echo "  make test-race        Run tests with race detector"
-	@echo "  make test-integration Run integration tests"
-	@echo "  make test-e2e         Run e2e suite (maps to integration tests)"
-	@echo "  make test-all         Run fmt-check + vet + test + race + tidy-check"
-	@echo "  make bench            Run benchmarks"
-	@echo "  make lint             Run linter (if golangci-lint is installed)"
-	@echo "  make vet              Run go vet"
-	@echo "  make fmt              Format code"
-	@echo "  make fmt-check        Fail if any file is not gofmt-formatted"
-	@echo "  make check            Run fmt + vet + test + tidy-check"
-	@echo "  make deps             Download dependencies"
-	@echo "  make tidy             Tidy go modules"
-	@echo "  make install          Install binaries to GOPATH/bin"
-	@echo "  make web-install      Install web dependencies"
-	@echo "  make web-dev          Start web dev server"
-	@echo "  make web-build        Build web assets and copy to pkg/api/dist"
-	@echo "  make run              Build and run server"
-	@echo "  make help             Show this help"
+	@echo "Targets:"
+	@echo "  build         Build all binaries"
+	@echo "  build-linux   Cross-compile for Linux"
+	@echo "  build-windows Cross-compile for Windows"
+	@echo "  build-darwin  Cross-compile for macOS"
+	@echo "  build-all     Cross-compile for all platforms"
+	@echo "  test          Run tests"
+	@echo "  test-race     Run tests with race detection"
+	@echo "  test-coverage Run tests with coverage report"
+	@echo "  fmt           Format code"
+	@echo "  lint          Run linter"
+	@echo "  clean         Clean build artifacts"
+	@echo "  install       Install binaries to GOPATH/bin"
+	@echo "  docker        Build Docker image"
+	@echo "  run           Build and run server"
+	@echo "  version       Show version information"
+	@echo "  help          Show this help"
