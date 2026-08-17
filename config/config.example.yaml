@@ -1,0 +1,45 @@
+# LoopWorker Configuration Example
+
+# Server settings
+server:
+  port: 19527
+  host: "0.0.0.0"
+  read_timeout: 30s
+  write_timeout: 30s
+
+# Plugin settings
+plugins:
+  dir: "~/.loopworker/plugins"
+  auto_load: true
+
+# Data settings
+data:
+  dir: "~/.loopworker/data"
+  db_file: "loopworker.db"
+
+# Logging
+logging:
+  level: "info"  # debug, info, warn, error
+  format: "json" # json, text
+  output: "stdout" # stdout, stderr, file
+
+# Security
+security:
+  enabled: true
+  auth_required: false
+  api_key: ""
+
+# Workflow settings
+workflow:
+  max_concurrent: 10
+  timeout: 5m
+
+# Self-healing
+selfheal:
+  enabled: true
+  circuit_breaker:
+    threshold: 5
+    timeout: 30s
+  retry:
+    max_attempts: 3
+    backoff: 1s
