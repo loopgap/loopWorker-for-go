@@ -293,7 +293,7 @@ func (s *APIServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.scheduler.CreateTask(context.Background(), data.Type, data.Config, data.Input)
+	task, err := s.scheduler.CreateTask(r.Context(), data.Type, data.Config, data.Input)
 	if err != nil {
 		sendError(w, r, err, http.StatusInternalServerError)
 		return
@@ -305,7 +305,7 @@ func (s *APIServer) createTask(w http.ResponseWriter, r *http.Request) {
 		s.scheduler.SaveTask(task)
 	}
 
-	if err := s.scheduler.QueueTask(context.Background(), task.ID); err != nil {
+	if err := s.scheduler.QueueTask(r.Context(), task.ID); err != nil {
 		sendError(w, r, err, http.StatusInternalServerError)
 		return
 	}
@@ -325,7 +325,7 @@ func (s *APIServer) getTask(w http.ResponseWriter, r *http.Request) {
 
 func (s *APIServer) deleteTask(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "taskID")
-	if err := s.scheduler.CancelTask(context.Background(), id); err != nil {
+	if err := s.scheduler.CancelTask(r.Context(), id); err != nil {
 		sendError(w, r, err, http.StatusInternalServerError)
 		return
 	}
@@ -556,7 +556,7 @@ func (s *APIServer) addTaskDependency(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.scheduler.AddDependency(context.Background(), taskID, data.DependencyID); err != nil {
+	if err := s.scheduler.AddDependency(r.Context(), taskID, data.DependencyID); err != nil {
 		sendError(w, r, err, http.StatusInternalServerError)
 		return
 	}
