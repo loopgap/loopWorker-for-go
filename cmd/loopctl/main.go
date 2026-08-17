@@ -21,7 +21,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"time"
+	"os/signal"
+	"syscall"
+	
 
 	"github.com/spf13/cobra"
 
@@ -387,9 +389,18 @@ func init() {
 	})
 }
 
+
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Handle graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		cancel()
+	}()
 
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
