@@ -150,33 +150,18 @@ func showMetricsData(server string) error {
 }
 
 func showLogsData(server string) error {
-	// TODO: Implement API call to get logs
-	logs := []LogEntry{
-		{
-			Timestamp: time.Now().Format(time.RFC3339),
-			Level:     "info",
-			Message:   "Task completed successfully",
-			TaskID:    "task-123",
-			WorkerID:  "worker-1",
-		},
-		{
-			Timestamp: time.Now().Add(-time.Second).Format(time.RFC3339),
-			Level:     "info",
-			Message:   "Worker started",
-			WorkerID:  "worker-2",
-		},
+	c := NewAPIClient(server)
+	logs, err := c.GetLogs()
+	if err != nil {
+		return fmt.Errorf("get logs: %w", err)
 	}
 
 	fmt.Println("=== Recent Logs ===")
 	for _, entry := range logs {
-		fmt.Printf("[%s] %s: %s", entry.Timestamp, entry.Level, entry.Message)
-		if entry.TaskID != "" {
-			fmt.Printf(" (task=%s)", entry.TaskID)
-		}
-		if entry.WorkerID != "" {
-			fmt.Printf(" (worker=%s)", entry.WorkerID)
-		}
-		fmt.Println()
+		timestamp, _ := entry["timestamp"].(string)
+		level, _ := entry["level"].(string)
+		message, _ := entry["message"].(string)
+		fmt.Printf("[%s] %s: %s\n", timestamp, level, message)
 	}
 
 	return nil
