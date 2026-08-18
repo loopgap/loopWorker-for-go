@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"sync"
 
+	"go.uber.org/zap"
 	"loopworker/internal/core/scheduler"
 	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/event"
 	"loopworker/pkg/logger"
-	"go.uber.org/zap"
 )
 
 type WorkerInfo struct {

@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"loopworker/pkg/event"
 	lwerrors "loopworker/pkg/errors"
+	"loopworker/pkg/event"
 	"loopworker/pkg/utils"
 )
 

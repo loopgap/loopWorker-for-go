@@ -16,16 +16,16 @@ import (
 	"github.com/go-chi/render"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"go.uber.org/zap"
 	"loopworker/internal/core/executor"
 	"loopworker/internal/core/observer"
 	"loopworker/internal/core/scheduler"
-	"loopworker/pkg/event"
 	lwerrors "loopworker/pkg/errors"
+	"loopworker/pkg/event"
 	"loopworker/pkg/logger"
 	"loopworker/pkg/security"
 	"loopworker/pkg/utils"
 	"loopworker/pkg/workflow"
-	"go.uber.org/zap"
 )
 
 //go:embed all:dist

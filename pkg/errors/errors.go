@@ -22,34 +22,34 @@ var (
 	ErrWorkerDuplicate = errors.New("worker already exists")
 
 	// Plugin errors
-	ErrPluginNotFound  = errors.New("plugin not found")
-	ErrPluginLoaded    = errors.New("plugin already loaded")
-	ErrPluginFailed    = errors.New("plugin execution failed")
-	ErrPluginTimeout   = errors.New("plugin execution timeout")
-	ErrPluginInvalid   = errors.New("invalid plugin")
+	ErrPluginNotFound = errors.New("plugin not found")
+	ErrPluginLoaded   = errors.New("plugin already loaded")
+	ErrPluginFailed   = errors.New("plugin execution failed")
+	ErrPluginTimeout  = errors.New("plugin execution timeout")
+	ErrPluginInvalid  = errors.New("invalid plugin")
 
 	// Workflow errors
-	ErrWorkflowNotFound    = errors.New("workflow not found")
-	ErrWorkflowInvalid     = errors.New("invalid workflow")
-	ErrWorkflowFailed      = errors.New("workflow execution failed")
-	ErrWorkflowCycle       = errors.New("workflow has circular dependency")
-	ErrWorkflowStepFailed  = errors.New("workflow step failed")
+	ErrWorkflowNotFound   = errors.New("workflow not found")
+	ErrWorkflowInvalid    = errors.New("invalid workflow")
+	ErrWorkflowFailed     = errors.New("workflow execution failed")
+	ErrWorkflowCycle      = errors.New("workflow has circular dependency")
+	ErrWorkflowStepFailed = errors.New("workflow step failed")
 
 	// Scheduler errors
-	ErrQueueFull      = errors.New("task queue is full")
-	ErrQueueEmpty     = errors.New("task queue is empty")
-	ErrSchedulerDown  = errors.New("scheduler is not running")
+	ErrQueueFull     = errors.New("task queue is full")
+	ErrQueueEmpty    = errors.New("task queue is empty")
+	ErrSchedulerDown = errors.New("scheduler is not running")
 
 	// Security errors
-	ErrUnauthorized   = errors.New("unauthorized")
-	ErrForbidden      = errors.New("forbidden")
-	ErrTokenExpired   = errors.New("token expired")
-	ErrTokenInvalid   = errors.New("invalid token")
-	ErrUserExists     = errors.New("user already exists")
-	ErrUserNotFound   = errors.New("user not found")
+	ErrUnauthorized    = errors.New("unauthorized")
+	ErrForbidden       = errors.New("forbidden")
+	ErrTokenExpired    = errors.New("token expired")
+	ErrTokenInvalid    = errors.New("invalid token")
+	ErrUserExists      = errors.New("user already exists")
+	ErrUserNotFound    = errors.New("user not found")
 	ErrInvalidPassword = errors.New("invalid password")
-	ErrRateLimited    = errors.New("rate limited")
-	ErrAccountLocked  = errors.New("account locked")
+	ErrRateLimited     = errors.New("rate limited")
+	ErrAccountLocked   = errors.New("account locked")
 
 	// System errors
 	ErrNotRunning     = errors.New("system is not running")
@@ -59,7 +59,7 @@ var (
 	ErrNetworkError   = errors.New("network error")
 
 	// Circuit breaker errors
-	ErrCircuitOpen    = errors.New("circuit breaker is open")
+	ErrCircuitOpen     = errors.New("circuit breaker is open")
 	ErrCircuitHalfOpen = errors.New("circuit breaker is half-open")
 
 	// Sandbox errors

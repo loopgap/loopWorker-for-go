@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
 	"loopworker/internal/core/dispatcher"
 	"loopworker/internal/core/executor"
 	"loopworker/internal/core/observer"
@@ -24,7 +25,6 @@ import (
 	"loopworker/pkg/skill"
 	"loopworker/pkg/utils"
 	"loopworker/pkg/workflow"
-	"go.uber.org/zap"
 )
 
 // ensureDirectories creates directories if they don't exist.

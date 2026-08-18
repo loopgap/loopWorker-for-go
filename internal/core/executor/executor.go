@@ -7,15 +7,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
 	"loopworker/internal/core/dispatcher"
 	"loopworker/internal/core/sandbox"
 	"loopworker/internal/core/scheduler"
 	"loopworker/internal/core/selfheal"
-	"loopworker/pkg/event"
 	lwerrors "loopworker/pkg/errors"
+	"loopworker/pkg/event"
 	"loopworker/pkg/logger"
 	"loopworker/pkg/skill"
-	"go.uber.org/zap"
 	"loopworker/pkg/utils"
 )
 

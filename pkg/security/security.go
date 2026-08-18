@@ -10,9 +10,9 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"go.uber.org/zap"
 	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/logger"
-	"go.uber.org/zap"
 )
 
 type Permission string

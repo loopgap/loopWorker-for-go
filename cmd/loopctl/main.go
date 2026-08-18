@@ -23,7 +23,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	
 
 	"github.com/spf13/cobra"
 
@@ -388,7 +387,6 @@ func init() {
 		},
 	})
 }
-
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())

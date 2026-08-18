@@ -14,11 +14,11 @@ import (
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 
-	"loopworker/pkg/event"
+	"go.uber.org/zap"
 	lwerrors "loopworker/pkg/errors"
+	"loopworker/pkg/event"
 	"loopworker/pkg/logger"
 	"loopworker/pkg/skill"
-	"go.uber.org/zap"
 	"loopworker/pkg/utils"
 )
 

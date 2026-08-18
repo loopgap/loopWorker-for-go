@@ -2,149 +2,117 @@
 
 Thank you for your interest in contributing to LoopWorker! This document provides guidelines and instructions for contributing.
 
-## Getting Started
+## Code of Conduct
 
-1. **Fork** the repository on GitHub
-2. **Clone** your fork locally:
-   ```bash
-   git clone https://github.com/<your-username>/loopWorker-for-go.git
-   cd loopWorker-for-go
-   ```
-3. **Create a branch** for your feature or fix:
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
+Please be respectful and inclusive in all interactions.
 
-## Development
+## How to Contribute
+
+### Reporting Issues
+
+- Use the GitHub issue tracker
+- Include a clear description of the issue
+- Include steps to reproduce
+- Include expected vs actual behavior
+- Include Go version and OS information
+
+### Submitting Changes
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes
+4. Run tests (`make test`)
+5. Run linter (`make lint`)
+6. Format code (`make fmt`)
+7. Commit your changes (`git commit -m 'feat: add amazing feature'`)
+8. Push to the branch (`git push origin feature/amazing-feature`)
+9. Open a Pull Request
+
+### Commit Message Format
+
+We follow the [Conventional Commits](https://www.conventionalcommits.org/) specification:
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+
+[optional footer]
+```
+
+Types:
+- `feat`: New feature
+- `fix`: Bug fix
+- `docs`: Documentation changes
+- `style`: Code style changes (formatting, etc.)
+- `refactor`: Code refactoring
+- `test`: Adding or updating tests
+- `chore`: Maintenance tasks
+
+### Code Style
+
+- Follow Go conventions and best practices
+- Use `gofmt` for formatting
+- Use `go vet` for static analysis
+- Write meaningful variable and function names
+- Add comments for exported functions and types
+- Keep functions focused and small
+
+### Testing
+
+- Write unit tests for new functionality
+- Ensure all tests pass (`make test`)
+- Run race detection (`make test-race`)
+- Aim for good test coverage
+
+### Documentation
+
+- Update README.md if needed
+- Add comments to exported functions
+- Update API documentation if changing endpoints
+- Add examples for new features
+
+## Development Setup
 
 ### Prerequisites
 
-- Go 1.21+
-- Node.js 18+ (for web UI)
-- (Optional) Rust + wasm-pack (for WASM plugins)
+- Go 1.21 or later
+- Git
+- Make (optional, but recommended)
 
 ### Building
 
 ```bash
-# Build the main binary
+# Build all binaries
 make build
 
-# Build everything
-make build-all
-```
-
-### Running Tests
-
-```bash
-# Run all tests
+# Run tests
 make test
 
-# Run with coverage
-make test-cover
+# Run linter
+make lint
 
-# Run with race detector
-make test-race
-
-# Run integration tests
-make test-integration
-
-# Run benchmarks
-make bench
+# Format code
+make fmt
 ```
 
-### Code Quality
-
-Before submitting a PR, ensure your code passes all checks:
+### Running
 
 ```bash
-make check   # runs fmt + vet + test
+# Run server
+make run
+
+# Or directly
+go run ./cmd/loopworker/
 ```
 
-## Project Structure
+## Release Process
 
-```
-loopWorker-for-go/
-├── cmd/loopworker/      # Main application entry point
-├── pkg/                 # Public packages (importable)
-│   ├── api/             # REST API handlers
-│   ├── config/          # Configuration parsing
-│   ├── dashboard/       # Web dashboard
-│   ├── debugger/        # Debug utilities
-│   ├── event/           # Event bus system
-│   ├── generator/       # Task generator
-│   ├── plugin/          # Plugin management
-│   ├── research/        # Research module
-│   ├── security/        # Auth & rate limiting
-│   ├── server/          # HTTP server
-│   ├── service/         # Service layer
-│   ├── skill/           # Skill management
-│   ├── ui/              # Terminal UI themes
-│   ├── utils/           # Shared utilities
-│   └── workflow/        # Workflow engine
-├── internal/            # Private packages
-│   ├── config/          # Internal config
-│   └── core/            # Core engine
-│       ├── dispatcher/  # Event dispatcher
-│       ├── executor/    # Task executor
-│       ├── observer/    # Observability
-│       ├── sandbox/     # WASM sandbox
-│       ├── scheduler/   # Task scheduler
-│       └── selfheal/    # Self-healing
-├── integration/         # Integration tests
-├── web/canvas/          # Web UI (React + Vite)
-├── examples/            # Example code
-├── docs/                # Documentation
-└── plugins/             # Plugin directory
-```
+1. Update CHANGELOG.md
+2. Update version in version/version.go
+3. Create a git tag
+4. Push tag to trigger CI/CD
 
-## Commit Guidelines
+## Questions?
 
-- Use clear, descriptive commit messages
-- Start with a verb in imperative mood (e.g., "Add feature", "Fix bug")
-- Reference issues when applicable (e.g., "Fix #123")
-- Keep commits focused and atomic
-
-### Commit Message Format
-
-```
-<type>(<scope>): <subject>
-
-<body>
-
-<footer>
-```
-
-**Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `perf`
-
-**Examples:**
-```
-feat(scheduler): add priority-based task queuing
-fix(sandbox): resolve memory leak in WASM runtime
-docs(readme): update API endpoint documentation
-test(dispatcher): add concurrency stress tests
-```
-
-## Pull Request Process
-
-1. Update documentation if needed
-2. Add tests for new functionality
-3. Ensure all tests pass (`make check`)
-4. Update the README if applicable
-5. Submit your PR with a clear description
-
-## Code Style
-
-- Follow standard Go conventions (`gofmt`, `go vet`)
-- Use meaningful variable and function names
-- Add comments for exported functions and complex logic
-- Keep functions focused and reasonably sized
-
-## Reporting Issues
-
-- Use GitHub Issues for bug reports and feature requests
-- Include steps to reproduce for bugs
-- Include Go version and OS information
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the MIT License.
+Feel free to open an issue for any questions about contributing.

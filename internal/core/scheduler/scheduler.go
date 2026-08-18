@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
 	"gorm.io/gorm"
-	"loopworker/pkg/logger"
 	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/event"
-	"go.uber.org/zap"
+	"loopworker/pkg/logger"
 )
 
 // ---- heap-based priority queue ----

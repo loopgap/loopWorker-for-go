@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"loopworker/pkg/logger"
-	lwerrors "loopworker/pkg/errors"
 	"go.uber.org/zap"
+	lwerrors "loopworker/pkg/errors"
+	"loopworker/pkg/logger"
 )
 
 // Logger is an interface that allows passing standard or custom loggers

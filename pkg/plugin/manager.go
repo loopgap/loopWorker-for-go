@@ -9,8 +9,8 @@ import (
 	"sync"
 
 	"loopworker/internal/core/sandbox"
-	"loopworker/pkg/event"
 	lwerrors "loopworker/pkg/errors"
+	"loopworker/pkg/event"
 	"loopworker/pkg/skill"
 )
 
