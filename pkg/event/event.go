@@ -3,6 +3,7 @@ package event
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"sync"
 	"time"
 )
 
@@ -47,17 +48,23 @@ type BaseEvent struct {
 	metadata  map[string]string
 }
 
+var baseEventPool = sync.Pool{
+	New: func() interface{} {
+		return &BaseEvent{}
+	},
+}
+
 func NewEvent(eventType EventType, payload interface{}, metadata map[string]string) *BaseEvent {
 	if metadata == nil {
 		metadata = make(map[string]string)
 	}
-	return &BaseEvent{
-		id:        generateID(),
-		eventType: eventType,
-		timestamp: time.Now(),
-		payload:   payload,
-		metadata:  metadata,
-	}
+	e := baseEventPool.Get().(*BaseEvent)
+	e.id = generateID()
+	e.eventType = eventType
+	e.timestamp = time.Now()
+	e.payload = payload
+	e.metadata = metadata
+	return e
 }
 
 func (e *BaseEvent) ID() string                  { return e.id }
