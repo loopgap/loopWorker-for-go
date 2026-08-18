@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"loopworker/pkg/errors"
+	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -97,12 +97,12 @@ func (sm *SecurityManager) CreateUser(username, password string, roleName string
 
 	role, ok := sm.roles[roleName]
 	if !ok {
-		return nil, fmt.Errorf("role %s not found", roleName)
+		return nil, fmt.Errorf("%w: %s", lwerrors.ErrForbidden, roleName)
 	}
 
 	for _, u := range sm.users {
 		if u.Username == username {
-			return nil, fmt.Errorf("user %s already exists", username)
+			return nil, fmt.Errorf("%w: %s", lwerrors.ErrUserExists, username)
 		}
 	}
 
@@ -132,12 +132,12 @@ func (sm *SecurityManager) Authenticate(username, password string) (*Token, erro
 
 	if user == nil {
 		sm.recordAudit("", "authenticate", "auth", false, "")
-		return nil, errors.ErrUserNotFound
+		return nil, lwerrors.ErrUserNotFound
 	}
 
 	if !CheckPassword(password, user.PasswordHash) {
 		sm.recordAudit(user.ID, "authenticate", "auth", false, "")
-		return nil, errors.ErrInvalidPassword
+		return nil, lwerrors.ErrInvalidPassword
 	}
 
 	now := time.Now()
@@ -161,16 +161,16 @@ func (sm *SecurityManager) ValidateToken(tokenValue string) (*User, error) {
 
 	token, ok := sm.tokens[tokenValue]
 	if !ok {
-		return nil, errors.ErrTokenInvalid
+		return nil, lwerrors.ErrTokenInvalid
 	}
 
 	if time.Now().After(token.ExpiresAt) {
-		return nil, errors.ErrTokenExpired
+		return nil, lwerrors.ErrTokenExpired
 	}
 
 	user, ok := sm.users[token.UserID]
 	if !ok {
-		return nil, errors.ErrUserNotFound
+		return nil, lwerrors.ErrUserNotFound
 	}
 
 	return user, nil

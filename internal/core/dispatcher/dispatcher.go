@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"loopworker/internal/core/scheduler"
-	"loopworker/pkg/errors"
+	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/event"
 	"loopworker/pkg/logger"
 	"go.uber.org/zap"
@@ -47,7 +47,7 @@ func (d *Dispatcher) RegisterWorker(ctx context.Context, workerID, pluginID stri
 	defer d.mu.Unlock()
 
 	if _, exists := d.workers[workerID]; exists {
-		return fmt.Errorf("worker %s already registered", workerID)
+		return fmt.Errorf("%w: %s", lwerrors.ErrWorkerDuplicate, workerID)
 	}
 
 	d.workers[workerID] = &WorkerInfo{
@@ -75,11 +75,11 @@ func (d *Dispatcher) UnregisterWorker(ctx context.Context, workerID string) erro
 
 	worker, exists := d.workers[workerID]
 	if !exists {
-		return fmt.Errorf("worker %s not found", workerID)
+		return fmt.Errorf("%w: %s", lwerrors.ErrWorkerNotFound, workerID)
 	}
 
 	if worker.Busy {
-		return fmt.Errorf("worker %s is busy", workerID)
+		return fmt.Errorf("%w: %s", lwerrors.ErrWorkerBusy, workerID)
 	}
 
 	delete(d.workers, workerID)
@@ -112,14 +112,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context) (*scheduler.Task, *WorkerInfo
 	d.mu.Unlock()
 
 	if worker == nil {
-		return nil, nil, errors.ErrWorkerNotFound
+		return nil, nil, lwerrors.ErrWorkerNotFound
 	}
 
 	task := d.provider.DequeueTask()
 	if task == nil {
 		// No tasks, release the worker
 		d.MarkWorkerFree(worker.ID)
-		return nil, nil, errors.ErrQueueEmpty
+		return nil, nil, lwerrors.ErrQueueEmpty
 	}
 
 	if err := d.provider.StartTask(ctx, task.ID, worker.ID); err != nil {

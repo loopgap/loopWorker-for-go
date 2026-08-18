@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"loopworker/pkg/logger"
+	lwerrors "loopworker/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -97,7 +98,7 @@ func GoSafeWithTimeout(ctx context.Context, timeout time.Duration, fn func(conte
 			errCh <- nil
 		case <-timeoutCtx.Done():
 			if timeoutCtx.Err() == context.DeadlineExceeded {
-				errCh <- fmt.Errorf("goroutine execution timed out after %v", timeout)
+				errCh <- fmt.Errorf("%w: after %v", lwerrors.ErrTaskTimeout, timeout)
 			} else {
 				errCh <- timeoutCtx.Err()
 			}
