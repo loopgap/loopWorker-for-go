@@ -12,7 +12,7 @@ import (
 	"loopworker/internal/core/scheduler"
 	"loopworker/internal/core/selfheal"
 	"loopworker/pkg/event"
-	"loopworker/pkg/errors"
+	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/logger"
 	"loopworker/pkg/skill"
 	"go.uber.org/zap"
@@ -146,7 +146,7 @@ func (e *Executor) StartWorker(ctx context.Context, workerID, pluginID string) e
 	defer e.mu.Unlock()
 
 	if _, exists := e.workers[workerID]; exists {
-		return fmt.Errorf("worker %s already exists", workerID)
+		return fmt.Errorf("%w: %s", lwerrors.ErrWorkerDuplicate, workerID)
 	}
 
 	worker := &Worker{
@@ -194,7 +194,7 @@ func (e *Executor) StopWorker(ctx context.Context, workerID string) error {
 	worker, exists := e.workers[workerID]
 	if !exists {
 		e.mu.Unlock()
-		return fmt.Errorf("worker %s not found", workerID)
+		return fmt.Errorf("%w: %s", lwerrors.ErrWorkerNotFound, workerID)
 	}
 
 	atomic.StoreInt32(&worker.state, workerStopped)
@@ -301,7 +301,7 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 					e.llmCircuitBreaker = e.selfHealer.GetCircuitBreaker("llm")
 				}
 				if e.llmCircuitBreaker != nil && !e.llmCircuitBreaker.AllowRequest() {
-					execErr = errors.ErrCircuitOpen
+					execErr = lwerrors.ErrCircuitOpen
 				} else {
 					// LLM调用超时独立设置，但受全局任务超时约束
 					llmTimeout := 30 * time.Second
@@ -327,7 +327,7 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 					execErr = e.selfHealer.ExecuteWithRecovery(taskCtx, worker.PluginID, func(innerCtx context.Context) error {
 						plugins := e.sandbox.ListPlugins()
 						if len(plugins) == 0 {
-							return errors.ErrPluginNotFound
+							return lwerrors.ErrPluginNotFound
 						}
 						var err error
 						skillCtx := e.getSkillContext()
@@ -352,7 +352,7 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 				} else {
 					plugins := e.sandbox.ListPlugins()
 					if len(plugins) == 0 {
-						execErr = errors.ErrPluginNotFound
+						execErr = lwerrors.ErrPluginNotFound
 					} else {
 						skillCtx := e.getSkillContext()
 						output, execErr = e.sandbox.Execute(taskCtx, worker.PluginID, task.Input, skillCtx)
@@ -373,7 +373,7 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 
 			// 检查是否是超时错误
 			if taskCtx.Err() == context.DeadlineExceeded && execErr == nil {
-				execErr = fmt.Errorf("task execution timed out after %v", e.taskTimeout)
+				execErr = fmt.Errorf("%w: after %v", lwerrors.ErrTaskTimeout, e.taskTimeout)
 			}
 
 			if execErr != nil {

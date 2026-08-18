@@ -11,6 +11,7 @@ import (
 
 	"gorm.io/gorm"
 	"loopworker/pkg/logger"
+	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/event"
 	"go.uber.org/zap"
 )
@@ -301,12 +302,12 @@ func (s *Scheduler) AddDependency(ctx context.Context, taskID, dependencyID stri
 
 	task := s.getTaskInternal(taskID)
 	if task == nil {
-		return fmt.Errorf("task %s not found", taskID)
+		return fmt.Errorf("%w: %s", lwerrors.ErrTaskNotFound, taskID)
 	}
 
 	dep := s.getTaskInternal(dependencyID)
 	if dep == nil {
-		return fmt.Errorf("dependency task %s not found", dependencyID)
+		return fmt.Errorf("%w: dependency %s", lwerrors.ErrTaskNotFound, dependencyID)
 	}
 
 	if dep.State == StateCompleted {
@@ -326,18 +327,18 @@ func (s *Scheduler) QueueTask(ctx context.Context, taskID string) error {
 
 	task := s.getTaskInternal(taskID)
 	if task == nil {
-		return fmt.Errorf("task %s not found", taskID)
+		return fmt.Errorf("%w: %s", lwerrors.ErrTaskNotFound, taskID)
 	}
 
 	if task.State != StatePending && task.State != StateRunning {
-		return fmt.Errorf("task %s is in state %s, cannot queue", taskID, task.State)
+		return fmt.Errorf("%w: task %s in state %s", lwerrors.ErrTaskInvalid, taskID, task.State)
 	}
 
 	if len(task.Dependencies) > 0 {
 		for depID := range task.DependsOn {
 			dep := s.getTaskInternal(depID)
 			if dep != nil && dep.State != StateCompleted {
-				return fmt.Errorf("task %s depends on incomplete task %s", taskID, depID)
+				return fmt.Errorf("%w: task %s depends on incomplete %s", lwerrors.ErrTaskInvalid, taskID, depID)
 			}
 		}
 	}
@@ -375,11 +376,11 @@ func (s *Scheduler) StartTask(ctx context.Context, taskID, workerID string) erro
 
 	task := s.getTaskInternal(taskID)
 	if task == nil {
-		return fmt.Errorf("task %s not found", taskID)
+		return fmt.Errorf("%w: %s", lwerrors.ErrTaskNotFound, taskID)
 	}
 
 	if task.State != StateQueued {
-		return fmt.Errorf("task %s is in state %s, cannot start", taskID, task.State)
+		return fmt.Errorf("%w: task %s in state %s", lwerrors.ErrTaskInvalid, taskID, task.State)
 	}
 
 	now := time.Now()
@@ -409,11 +410,11 @@ func (s *Scheduler) CompleteTask(ctx context.Context, taskID, workerID string, r
 
 	task := s.getTaskInternal(taskID)
 	if task == nil {
-		return fmt.Errorf("task %s not found", taskID)
+		return fmt.Errorf("%w: %s", lwerrors.ErrTaskNotFound, taskID)
 	}
 
 	if task.State != StateRunning {
-		return fmt.Errorf("task %s is in state %s, cannot complete", taskID, task.State)
+		return fmt.Errorf("%w: task %s in state %s", lwerrors.ErrTaskInvalid, taskID, task.State)
 	}
 
 	now := time.Now()
@@ -469,11 +470,11 @@ func (s *Scheduler) FailTask(ctx context.Context, taskID, workerID, errMsg strin
 
 	task := s.getTaskInternal(taskID)
 	if task == nil {
-		return fmt.Errorf("task %s not found", taskID)
+		return fmt.Errorf("%w: %s", lwerrors.ErrTaskNotFound, taskID)
 	}
 
 	if task.State != StateRunning {
-		return fmt.Errorf("task %s is in state %s, cannot fail", taskID, task.State)
+		return fmt.Errorf("%w: task %s in state %s", lwerrors.ErrTaskInvalid, taskID, task.State)
 	}
 
 	task.Error = errMsg
@@ -525,11 +526,11 @@ func (s *Scheduler) CancelTask(ctx context.Context, taskID string) error {
 
 	task := s.getTaskInternal(taskID)
 	if task == nil {
-		return fmt.Errorf("task %s not found", taskID)
+		return fmt.Errorf("%w: %s", lwerrors.ErrTaskNotFound, taskID)
 	}
 
 	if task.State == StateCompleted || task.State == StateFailed || task.State == StateCancelled || task.State == StateDeadLetter {
-		return fmt.Errorf("task %s is in terminal state %s", taskID, task.State)
+		return fmt.Errorf("%w: task %s in terminal state %s", lwerrors.ErrTaskInvalid, taskID, task.State)
 	}
 
 	now := time.Now()

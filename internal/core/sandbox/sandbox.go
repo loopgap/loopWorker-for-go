@@ -15,6 +15,7 @@ import (
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 
 	"loopworker/pkg/event"
+	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/logger"
 	"loopworker/pkg/skill"
 	"go.uber.org/zap"
@@ -194,7 +195,7 @@ func (s *Sandbox) LoadPlugin(name string, plugin Plugin) error {
 	defer s.mu.Unlock()
 
 	if _, exists := s.plugins[name]; exists {
-		return fmt.Errorf("plugin %s already loaded", name)
+		return fmt.Errorf("%w: %s", lwerrors.ErrPluginLoaded, name)
 	}
 
 	s.plugins[name] = plugin
@@ -208,7 +209,7 @@ func (s *Sandbox) UnloadPlugin(name string) error {
 	defer s.mu.Unlock()
 
 	if _, exists := s.plugins[name]; !exists {
-		return fmt.Errorf("plugin %s not found", name)
+		return fmt.Errorf("%w: %s", lwerrors.ErrPluginNotFound, name)
 	}
 
 	delete(s.plugins, name)
@@ -224,7 +225,7 @@ func (s *Sandbox) Execute(ctx context.Context, pluginName string, input []byte, 
 	s.mu.RUnlock()
 
 	if !exists || !semExists {
-		return nil, fmt.Errorf("plugin %s not found", pluginName)
+		return nil, fmt.Errorf("%w: %s", lwerrors.ErrPluginNotFound, pluginName)
 	}
 
 	select {
@@ -269,7 +270,7 @@ func (s *Sandbox) Execute(ctx context.Context, pluginName string, input []byte, 
 			}
 		}
 
-		return nil, fmt.Errorf("execution timeout after %d seconds", s.config.MaxCPUSeconds)
+		return nil, fmt.Errorf("%w: after %d seconds", lwerrors.ErrSandboxTimeout, s.config.MaxCPUSeconds)
 	case res := <-ch:
 		elapsed := time.Since(start)
 
@@ -308,7 +309,7 @@ func (s *Sandbox) Execute(ctx context.Context, pluginName string, input []byte, 
 				s.stats.MaxExecTime = elapsed
 			}
 			s.mu.Unlock()
-			return nil, fmt.Errorf("output exceeds maximum size of %d MB", s.config.MaxOutputMB)
+			return nil, fmt.Errorf("%w: max %d MB", lwerrors.ErrSandboxOversized, s.config.MaxOutputMB)
 		}
 
 		s.mu.Lock()

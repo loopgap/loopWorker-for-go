@@ -9,6 +9,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	lwerrors "loopworker/pkg/errors"
 )
 
 type EventFilter struct {
@@ -157,7 +159,7 @@ func (s *LocalEventStore) LoadSnapshot(ctx context.Context, stateID string) ([]b
 	}
 
 	if latestFile == "" {
-		return nil, fmt.Errorf("no snapshot found for stateID: %s", stateID)
+		return nil, fmt.Errorf("%w: %s", lwerrors.ErrDatabaseError, stateID)
 	}
 
 	return os.ReadFile(filepath.Join(snapshotDir, latestFile))

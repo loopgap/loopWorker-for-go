@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"loopworker/pkg/event"
+	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/utils"
 )
 
@@ -197,7 +198,7 @@ func (we *WorkflowEngine) Execute(ctx context.Context, workflowID string) error 
 	we.mu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("workflow %s not found", workflowID)
+		return fmt.Errorf("%w: %s", lwerrors.ErrWorkflowNotFound, workflowID)
 	}
 
 	return we.executeWorkflow(ctx, workflow)
@@ -357,7 +358,7 @@ func (we *WorkflowEngine) computeExecutionOrder(workflow *Workflow) ([]string, e
 	}
 
 	if len(sorted) != len(workflow.StepOrder) {
-		return nil, fmt.Errorf("cycle detected in workflow dependencies")
+		return nil, lwerrors.ErrWorkflowCycle
 	}
 
 	return sorted, nil
@@ -575,7 +576,7 @@ func (d *DAGWorkflow) TopologicalSort() ([]string, error) {
 	}
 
 	if len(sorted) != len(d.StepOrder) {
-		return nil, fmt.Errorf("cycle detected in workflow")
+		return nil, lwerrors.ErrWorkflowCycle
 	}
 
 	return sorted, nil

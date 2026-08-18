@@ -10,6 +10,7 @@ import (
 
 	"loopworker/internal/core/sandbox"
 	"loopworker/pkg/event"
+	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/skill"
 )
 
@@ -92,12 +93,12 @@ func (pm *PluginManager) LoadPlugin(ctx context.Context, pluginDir string) error
 	pm.mu.Lock()
 	if _, exists := pm.loaded[info.Name]; exists {
 		pm.mu.Unlock()
-		return fmt.Errorf("plugin %s already loaded", info.Name)
+		return fmt.Errorf("%w: %s", lwerrors.ErrPluginLoaded, info.Name)
 	}
 	pm.mu.Unlock()
 
 	handler := func(ctx context.Context, input []byte, skillCtx skill.SkillContext) ([]byte, error) {
-		return nil, fmt.Errorf("plugin execution not implemented for %s", info.Name)
+		return nil, fmt.Errorf("%w: %s", lwerrors.ErrPluginInvalid, info.Name)
 	}
 
 	mockPlugin := sandbox.NewMockPlugin(info.Name, info.Version, handler)
@@ -126,7 +127,7 @@ func (pm *PluginManager) UnloadPlugin(ctx context.Context, name string) error {
 	info, exists := pm.loaded[name]
 	if !exists {
 		pm.mu.Unlock()
-		return fmt.Errorf("plugin %s not loaded", name)
+		return fmt.Errorf("%w: %s", lwerrors.ErrPluginNotFound, name)
 	}
 	delete(pm.loaded, name)
 	pm.mu.Unlock()
