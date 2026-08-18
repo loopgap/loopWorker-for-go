@@ -20,6 +20,7 @@ import (
 	"loopworker/internal/core/observer"
 	"loopworker/internal/core/scheduler"
 	"loopworker/pkg/event"
+	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/logger"
 	"loopworker/pkg/security"
 	"loopworker/pkg/utils"
@@ -61,6 +62,7 @@ func NewAPIServer(sched *scheduler.Scheduler, exec *executor.Executor, bus *even
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
+	r.Use(requestBodyLimitMiddleware)
 	r.Use(requestLoggingMiddleware)
 
 	api := &APIServer{
@@ -134,6 +136,15 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), "request_id", requestID)
 		w.Header().Set("X-Request-ID", requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// requestBodyLimitMiddleware limits request body size to 10MB
+func requestBodyLimitMiddleware(next http.Handler) http.Handler {
+	const maxBodySize = 10 << 20 // 10MB
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -276,7 +287,7 @@ type CreateTaskRequest struct {
 
 func (req *CreateTaskRequest) Bind(r *http.Request) error {
 	if req.Type == "" {
-		return fmt.Errorf("task type is required")
+		return lwerrors.ErrTaskInvalid
 	}
 	if len(req.Type) > 255 {
 		return fmt.Errorf("task type too long (max 255 characters)")
@@ -372,7 +383,7 @@ func (s *APIServer) getTask(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "taskID")
 	task, exists := s.scheduler.GetTask(id)
 	if !exists {
-		sendError(w, r, fmt.Errorf("task not found"), http.StatusNotFound)
+		sendError(w, r, lwerrors.ErrTaskNotFound, http.StatusNotFound)
 		return
 	}
 	sendSuccess(w, r, task, http.StatusOK)
