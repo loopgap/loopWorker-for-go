@@ -7,6 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"loopworker/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // Logger is an interface that allows passing standard or custom loggers
@@ -18,7 +21,7 @@ type Logger interface {
 type DefaultLogger struct{}
 
 func (l *DefaultLogger) Printf(format string, v ...interface{}) {
-	fmt.Printf("[SafeGo] "+format+"\n", v...)
+	logger.Error("panic recovered", zap.String("component", "SafeGo"), zap.Any("panic", v))
 }
 
 // globalLogger 使用atomic.Value实现并发安全的全局logger

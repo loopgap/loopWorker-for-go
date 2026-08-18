@@ -8,6 +8,8 @@ import (
 	"loopworker/internal/core/scheduler"
 	"loopworker/pkg/errors"
 	"loopworker/pkg/event"
+	"loopworker/pkg/logger"
+	"go.uber.org/zap"
 )
 
 type WorkerInfo struct {
@@ -60,7 +62,7 @@ func (d *Dispatcher) RegisterWorker(ctx context.Context, workerID, pluginID stri
 		}, nil)
 		if err := d.eventBus.Publish(ctx, spawnEvent); err != nil {
 			// 记录错误但不阻塞注册
-			fmt.Printf("Warning: failed to publish worker spawned event: %v\n", err)
+			logger.Warn("failed to publish worker spawned event", zap.Error(err))
 		}
 	}
 
@@ -89,7 +91,7 @@ func (d *Dispatcher) UnregisterWorker(ctx context.Context, workerID string) erro
 		}, nil)
 		if err := d.eventBus.Publish(ctx, exitEvent); err != nil {
 			// 记录错误但不阻塞注销
-			fmt.Printf("Warning: failed to publish worker exited event: %v\n", err)
+			logger.Warn("failed to publish worker exited event", zap.Error(err))
 		}
 	}
 
@@ -122,7 +124,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context) (*scheduler.Task, *WorkerInfo
 
 	if err := d.provider.StartTask(ctx, task.ID, worker.ID); err != nil {
 		// 记录错误但不阻塞分发
-		fmt.Printf("Warning: failed to start task %s: %v\n", task.ID, err)
+		logger.Warn("failed to start task", zap.String("taskID", task.ID), zap.Error(err))
 	}
 
 	return task, worker, nil

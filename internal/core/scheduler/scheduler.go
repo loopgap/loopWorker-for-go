@@ -140,7 +140,7 @@ func NewScheduler(eventBus *event.EventBus) *Scheduler {
 	// Note: We use a local sqlite file for persistence or memory for tests
 	db, err := initDB(dbPath)
 	if err != nil {
-		fmt.Printf("Warning: failed to init db: %v. Using memory only.\n", err)
+		logger.Warn("failed to init db, using memory only", zap.Error(err))
 	}
 
 	s := &Scheduler{
@@ -274,7 +274,7 @@ func (s *Scheduler) CreateTask(ctx context.Context, taskType string, config map[
 		}, nil)
 		if err := s.eventBus.Publish(ctx, createEvent); err != nil {
 			// 记录错误但不阻塞任务创建
-			fmt.Printf("Warning: failed to publish task created event: %v\n", err)
+			logger.Warn("failed to publish task created event", zap.Error(err))
 		}
 	}
 
@@ -396,7 +396,7 @@ func (s *Scheduler) StartTask(ctx context.Context, taskID, workerID string) erro
 		}, nil)
 		if err := s.eventBus.Publish(ctx, startEvent); err != nil {
 			// 记录错误但不阻塞任务启动
-			fmt.Printf("Warning: failed to publish task started event: %v\n", err)
+			logger.Warn("failed to publish task started event", zap.Error(err))
 		}
 	}
 
@@ -432,7 +432,7 @@ func (s *Scheduler) CompleteTask(ctx context.Context, taskID, workerID string, r
 		}, nil)
 		if err := s.eventBus.Publish(ctx, completeEvent); err != nil {
 			// 记录错误但不阻塞任务完成
-			fmt.Printf("Warning: failed to publish task completed event: %v\n", err)
+			logger.Warn("failed to publish task completed event", zap.Error(err))
 		}
 	}
 
@@ -491,7 +491,7 @@ func (s *Scheduler) FailTask(ctx context.Context, taskID, workerID, errMsg strin
 			}, nil)
 			if err := s.eventBus.Publish(ctx, retryEvent); err != nil {
 				// 记录错误但不阻塞任务重试
-				fmt.Printf("Warning: failed to publish task retried event: %v\n", err)
+				logger.Warn("failed to publish task retried event", zap.Error(err))
 			}
 		}
 		s.insertByPriority(task)
@@ -511,7 +511,7 @@ func (s *Scheduler) FailTask(ctx context.Context, taskID, workerID, errMsg strin
 			}, nil)
 			if err := s.eventBus.Publish(ctx, failEvent); err != nil {
 				// 记录错误但不阻塞任务失败
-				fmt.Printf("Warning: failed to publish task failed event: %v\n", err)
+				logger.Warn("failed to publish task failed event", zap.Error(err))
 			}
 		}
 	}
@@ -543,7 +543,7 @@ func (s *Scheduler) CancelTask(ctx context.Context, taskID string) error {
 		cancelEvent := event.NewEvent(event.EventTaskCancelled, nil, map[string]string{"task_id": taskID})
 		if err := s.eventBus.Publish(ctx, cancelEvent); err != nil {
 			// 记录错误但不阻塞任务取消
-			fmt.Printf("Warning: failed to publish task cancelled event: %v\n", err)
+			logger.Warn("failed to publish task cancelled event", zap.Error(err))
 		}
 	}
 

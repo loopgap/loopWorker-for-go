@@ -18,11 +18,13 @@ import (
 	"loopworker/internal/core/selfheal"
 	"loopworker/pkg/api"
 	"loopworker/pkg/event"
+	"loopworker/pkg/logger"
 	"loopworker/pkg/plugin"
 	"loopworker/pkg/security"
 	"loopworker/pkg/skill"
 	"loopworker/pkg/utils"
 	"loopworker/pkg/workflow"
+	"go.uber.org/zap"
 )
 
 // ensureDirectories creates directories if they don't exist.
@@ -259,7 +261,7 @@ func (s *Server) Start() error {
 	s.components.Executor.StartWatchdog(s.ctx)
 
 	addr := fmt.Sprintf(":%d", s.config.Port)
-	fmt.Printf("LoopWorker starting on http://localhost%s\n", addr)
+	logger.Info("LoopWorker starting", zap.String("address", addr))
 
 	s.httpServer = &http.Server{
 		Addr:    addr,

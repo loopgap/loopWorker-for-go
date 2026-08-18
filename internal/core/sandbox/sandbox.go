@@ -165,7 +165,7 @@ func NewSandbox(config SandboxConfig) *Sandbox {
 			if !ok {
 				return
 			}
-			fmt.Printf("[WASM LOG %s] %s\n", mod.Name(), string(msgBytes))
+			logger.Debug("wasm log", zap.String("module", mod.Name()), zap.String("message", string(msgBytes)))
 		}).
 		Export("host_log").
 		Instantiate(ctx)
@@ -265,7 +265,7 @@ func (s *Sandbox) Execute(ctx context.Context, pluginName string, input []byte, 
 				InputSize: len(input),
 			}, nil)); publishErr != nil {
 				// 记录错误但不阻塞执行
-				fmt.Printf("Warning: failed to publish plugin executed event: %v\n", publishErr)
+				logger.Warn("failed to publish plugin executed event", zap.Error(publishErr))
 			}
 		}
 
@@ -292,7 +292,7 @@ func (s *Sandbox) Execute(ctx context.Context, pluginName string, input []byte, 
 					InputSize: len(input),
 				}, nil)); publishErr != nil {
 					// 记录错误但不阻塞执行
-					fmt.Printf("Warning: failed to publish plugin executed event: %v\n", publishErr)
+					logger.Warn("failed to publish plugin executed event", zap.Error(publishErr))
 				}
 			}
 
@@ -328,7 +328,7 @@ func (s *Sandbox) Execute(ctx context.Context, pluginName string, input []byte, 
 				OutputSize: len(res.output),
 			}, nil)); publishErr != nil {
 				// 记录错误但不阻塞执行
-				fmt.Printf("Warning: failed to publish plugin executed event: %v\n", publishErr)
+				logger.Warn("failed to publish plugin executed event", zap.Error(publishErr))
 			}
 		}
 

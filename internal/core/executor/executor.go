@@ -181,7 +181,7 @@ func (e *Executor) StartWorker(ctx context.Context, workerID, pluginID string) e
 		}, nil)
 		if err := e.eventBus.Publish(ctx, evt); err != nil {
 			// 记录错误但不阻塞worker启动
-			fmt.Printf("Warning: failed to publish worker spawned event: %v\n", err)
+			logger.Warn("failed to publish worker spawned event", zap.Error(err))
 		}
 	}
 
@@ -214,7 +214,7 @@ func (e *Executor) StopWorker(ctx context.Context, workerID string) error {
 		}, nil)
 		if err := e.eventBus.Publish(ctx, evt); err != nil {
 			// 记录错误但不阻塞worker停止
-			fmt.Printf("Warning: failed to publish worker exited event: %v\n", err)
+			logger.Warn("failed to publish worker exited event", zap.Error(err))
 		}
 	}
 
@@ -342,7 +342,7 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 									Success:   true,
 								}, nil)); publishErr != nil {
 									// 记录错误但不阻塞执行
-									fmt.Printf("Warning: failed to publish skill invoked event: %v\n", publishErr)
+									logger.Warn("failed to publish skill invoked event", zap.Error(publishErr))
 								}
 							}
 						}
@@ -379,14 +379,14 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 			if execErr != nil {
 				if err := e.dispatcher.FailTask(ctx, task.ID, worker.ID, execErr.Error()); err != nil {
 					// 记录错误但不阻塞执行
-					fmt.Printf("Warning: failed to fail task %s: %v\n", task.ID, err)
+					logger.Warn("failed to fail task", zap.String("taskID", task.ID), zap.Error(err))
 				}
 				atomic.AddInt64(&e.stats.TotalTasksFailed, 1)
 				atomic.AddInt64(&worker.tasksFailed, 1)
 			} else {
 				if err := e.dispatcher.CompleteTask(ctx, task.ID, worker.ID, output); err != nil {
 					// 记录错误但不阻塞执行
-					fmt.Printf("Warning: failed to complete task %s: %v\n", task.ID, err)
+					logger.Warn("failed to complete task", zap.String("taskID", task.ID), zap.Error(err))
 				}
 			}
 
@@ -554,24 +554,24 @@ func (e *Executor) sweepZombies(ctx context.Context) {
 	e.mu.RUnlock()
 
 	for i, id := range zombies {
-		fmt.Printf("[Watchdog] Worker %s is a zombie, forcefully terminating it\n", id)
+		logger.Warn("zombie worker detected, forcefully terminating", zap.String("workerID", id))
 		if err := e.StopWorker(ctx, id); err != nil {
 			// 记录错误但不阻塞watchdog
-			fmt.Printf("Warning: failed to stop zombie worker %s: %v\n", id, err)
+			logger.Warn("failed to stop zombie worker", zap.String("workerID", id), zap.Error(err))
 		}
 
 		// DeadLetter queue logic: mark the task as failed with Zombie status
 		if currentTasks[i] != "" {
 			if err := e.dispatcher.FailTask(ctx, currentTasks[i], id, "zombie task forcefully terminated by watchdog"); err != nil {
 				// 记录错误但不阻塞watchdog
-				fmt.Printf("Warning: failed to fail task %s: %v\n", currentTasks[i], err)
+				logger.Warn("failed to fail task", zap.String("taskID", currentTasks[i]), zap.Error(err))
 			}
 		}
 
 		// Respawn the worker to maintain the pool
 		if err := e.StartWorker(ctx, id+"-reborn", "default"); err != nil {
 			// 记录错误但不阻塞watchdog
-			fmt.Printf("Warning: failed to respawn worker %s: %v\n", id+"-reborn", err)
+			logger.Warn("failed to respawn worker", zap.String("workerID", id+"-reborn"), zap.Error(err))
 		}
 	}
 }

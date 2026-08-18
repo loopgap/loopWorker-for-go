@@ -20,9 +20,11 @@ import (
 	"loopworker/internal/core/observer"
 	"loopworker/internal/core/scheduler"
 	"loopworker/pkg/event"
+	"loopworker/pkg/logger"
 	"loopworker/pkg/security"
 	"loopworker/pkg/utils"
 	"loopworker/pkg/workflow"
+	"go.uber.org/zap"
 )
 
 //go:embed all:dist
@@ -139,7 +141,6 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 func requestLoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		requestID := r.Context().Value("request_id")
 
 		// Wrap response writer to capture status code
 		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
@@ -147,13 +148,12 @@ func requestLoggingMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(rw, r)
 
 		duration := time.Since(start)
-		method := r.Method
-		path := r.URL.Path
-		status := rw.statusCode
 
-		// Log using standard log package (avoid zap dependency in api package)
-		fmt.Printf("[%s] %s %s %d %s\n",
-			requestID, method, path, status, duration)
+		logger.Info("request",
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			zap.Int("status", rw.statusCode),
+			zap.Duration("duration", duration))
 	})
 }
 
@@ -583,7 +583,7 @@ func (s *APIServer) streamEventsLive(w http.ResponseWriter, r *http.Request) {
 						taskData, marshalErr = json.Marshal(t)
 						if marshalErr != nil {
 							// 记录错误但不阻塞响应
-							fmt.Printf("Warning: failed to marshal task: %v\n", marshalErr)
+							logger.Warn("failed to marshal task", zap.Error(marshalErr))
 						}
 					}
 				}

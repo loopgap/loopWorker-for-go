@@ -11,6 +11,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"loopworker/pkg/errors"
+	"loopworker/pkg/logger"
+	"go.uber.org/zap"
 )
 
 type Permission string
@@ -220,7 +222,7 @@ func HashPassword(password string) string {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		// 如果bcrypt失败，回退到SHA-256（不推荐，但保证功能正常）
-		fmt.Printf("Warning: bcrypt failed, falling back to SHA-256: %v\n", err)
+		logger.Warn("bcrypt failed, falling back to SHA-256", zap.Error(err))
 		h := sha256.Sum256([]byte(password))
 		return hex.EncodeToString(h[:])
 	}
