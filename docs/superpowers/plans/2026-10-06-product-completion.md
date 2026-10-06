@@ -1232,17 +1232,19 @@ npm run build
 
 Expected: 构建成功，产物出现在 `web\canvas\dist`。
 
-然后**先清空再拷贝**——`//go:embed all:dist` 会嵌入目录下所有文件，直接覆盖拷贝会把旧 hash 的 js/css 留在 `pkg/api/dist` 里，被一起打进二进制：
+然后**先覆盖写入、再删除陈旧文件**。`//go:embed all:dist` 会嵌入目录下所有文件，所以旧 hash 的 js/css 必须清掉；但**绝不能先把 `pkg/api/dist` 删空**——那个窗口里 `go:embed` 失败，任何并行的 `go build` 或 `go test ./pkg/api/` 都会报 embed 错误。倒过来做，目录始终有内容：
 
 ```
 cd D:\Destop\test\loopWorker-for-go
-Remove-Item -Recurse -Force pkg/api/dist
-New-Item -ItemType Directory -Force pkg/api/dist | Out-Null
-Copy-Item -Recurse -Force web/canvas/dist/* pkg/api/dist/
-Get-ChildItem -Recurse pkg/api/dist | ForEach-Object { $_.FullName.Replace((Get-Location).Path + '\', '') + '  ' + $_.Length }
+$new = (Resolve-Path web/canvas/dist).Path
+$dst = (Resolve-Path pkg/api/dist).Path
+Copy-Item -Recurse -Force "$new/*" $dst
+$keep = Get-ChildItem -Recurse -File $new | ForEach-Object { $_.FullName.Replace("$new\", '') }
+Get-ChildItem -Recurse -File $dst | Where-Object { $keep -notcontains $_.FullName.Replace("$dst\", '') } | Remove-Item -Force
+Get-ChildItem -Recurse $dst | ForEach-Object { $_.FullName.Replace("$dst\", '') + '  ' + $_.Length }
 ```
 
-Expected: 输出里**只有**一份 `index-*.js` 和一份 `index-*.css`，没有第二个 hash 版本的同名文件。
+Expected: 输出里**只有**一份 `index-*.js` 和一份 `index-*.css`，没有第二个 hash 版本的同名文件，且 `index.html`、`favicon.svg`、`icons.svg` 都在。
 
 - [ ] **Step 5: 清理构建残留**
 
@@ -1402,9 +1404,11 @@ rm -rf web/canvas/node_modules web/canvas/dist
 go build ./... && go test ./pkg/api/
 ```
 
-Clear `pkg/api/dist` before copying. The embed directive takes every file in the
-directory, so a stale `index-<hash>.js` left behind by a previous build is
-embedded into the binary and shipped to customers.
+Clear out the stale hashed assets after the new ones are in place. The embed
+directive takes every file in the directory, so a stale `index-<hash>.js` left
+behind by a previous build is embedded into the binary and shipped to
+customers. Copy first and delete second - emptying the directory first breaks
+`//go:embed all:dist` for anything compiling concurrently.
 
 ## Keeping the tree clean
 
