@@ -212,7 +212,7 @@ npm run build          # 产物落在 web/canvas/dist（已被 .gitignore 覆盖
 - `.gitignore` 新增 `.d*-scratch/` 模式——这是 `docs/.d1-scratch/` 能存在至今的直接原因。
 - 在 `CONTRIBUTING.md` 写明整洁规范：临时与验证产物只允许落在 `_scratch/`，不入库；交付前 `git status --ignored` 不应显示仓库内其他位置的运行时残留。
 - 重写 `.release/SCOPE-PROPOSAL.md` 为**状态文档**：已修项标明已修并附证据位置，仍待决项标明待决。删除 301 死循环与 `LoadConfig` 两处失真描述。保留文件而非删除，以保留决策轨迹。
-- **防漂移测试**：新增一条测试，断言 `openapi.json` 覆盖了所有已注册的 `/api/v1/*` 路由。这是唯一能防止"文档与代码再次分叉"的自动化投入，一次性成本、长期收益。注意该测试落在 `pkg/api`，属 Agent B 的文件所有权（见 §5），与 W2 一并实现；此条列在 W4 是因为它服务于 W4 的目标，不因为归属。
+- **防漂移测试：已存在，无需新增**。`TestOpenAPISpecMatchesRegisteredRoutes`（`pkg/api/openapi_test.go:55`，注释标为 "the permanent SPEC 10-B10 guard"）已经断言 `openapi.json` 与路由注册表不互漂移。改为在 W2 完成后验证它仍然通过，不要再写一个重复的检查。
 
 ### W5 — 商业化交付件（D7）
 
