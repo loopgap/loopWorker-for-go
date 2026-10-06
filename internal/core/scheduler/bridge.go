@@ -34,6 +34,16 @@ func (b *SchedulerBridge) CreateTask(ctx context.Context, taskType string, confi
 	}, nil
 }
 
+// QueueTask puts an already-created task into the priority queue.
+//
+// CreateTask persists a task but does not enqueue it: the REST path pairs the two
+// itself (pkg/api/handlers_task_mutate.go), so a caller that only had
+// TaskDispatcher had no way to make the task runnable and the task sat in
+// "pending" forever. A workflow step is exactly that caller.
+func (b *SchedulerBridge) QueueTask(ctx context.Context, taskID string) error {
+	return b.scheduler.QueueTask(ctx, taskID)
+}
+
 // WaitForTask polls the scheduler for task state until it reaches a terminal state.
 func (b *SchedulerBridge) WaitForTask(ctx context.Context, taskID string) (*workflow.TaskRef, error) {
 	ticker := time.NewTicker(50 * time.Millisecond)

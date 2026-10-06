@@ -1,5 +1,19 @@
 # LoopWorker 补全设计文档（架构师：高见远）
 
+> ⚠️ **历史文档，勿照此实施。** 本文档记录 2026-08-15 的补全方案，以下决策与当前代码**已经不一致**：
+> - **D2 计划新增的 `/api/v1/metrics` 与 `/api/v1/logs` 端点从未实现**，指标与日志只在 loopback
+>   admin 监听器上（`server.admin_port`，默认 19528），需要 admin 凭据。README 与
+>   `docs/api/api-reference.md` 已按真实路由修正。
+> - **D3 计划「补全 5 个 CLI」**：`loopctl` 已按真实端点重写；`loopbench` / `loopdebug` /
+>   `loopsim` / `loopwatch` 仍是本地玩具，未与服务端交互，**是否保留待产品裁决**。
+> - **D4 计划复用 gorm/sqlite 持久化 User/Token**：gorm 已从 `go.mod` 移除（零 import），
+>   `SecurityManager` 至今**没有任何生产调用方**。
+> - **D5 计划删除 `pkg/server.Config`**：未执行；`internal/config` 与 `pkg/server` 仍是两套，
+>   由 `pkg/server` 的装配层收口。
+>
+> 真实状态以 [AGENT-COLLABORATION-SPEC.md](../../AGENT-COLLABORATION-SPEC.md) §8/§10 为准。
+> 本文档保留是为了记录当时的判断与取舍，不作为实施依据。
+
 > 文档版本：v1.0
 > 作者：高见远（架构师）
 > 日期：2026-08-15

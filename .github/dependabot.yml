@@ -1,0 +1,65 @@
+# Dependency policy: fresh, reviewed, and never a surprise. Paired with
+# govulncheck (CI job `quality`) which scans for *known* vulnerabilities, while
+# Dependabot handles version drift and ecosystem updates.
+#
+# TODO(owner): raise a PR against the org if you want grouped weekly updates
+# instead of daily; the limits below are deliberately small so an unattended
+# repo cannot drown a single maintainer in PRs (support debt = tickets).
+
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "03:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    rebase-strategy: auto
+    labels:
+      - dependencies
+      - automerge-candidate
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      go-major:
+        patterns:
+          - "*"
+        update-types:
+          - major
+
+  # The release tooling is a module too (coverage gate, relcheck).
+  - package-ecosystem: gomod
+    directory: "/.release/tools"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "chore(release-tools)"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: tuesday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # Container base images: alpine (runtime) + golang (builder). The builder tag
+  # MUST keep matching go.mod, so those PRs need a human — relcheck will fail
+  # the build if they are merged out of sync.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: tuesday
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - base-image

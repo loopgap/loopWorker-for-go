@@ -1,8 +1,10 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +12,9 @@ import (
 	"testing"
 
 	"loopworker/internal/core/sandbox"
+	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/event"
+	"loopworker/pkg/skill"
 )
 
 func TestPluginManagerLoadPlugin(t *testing.T) {
@@ -23,8 +27,7 @@ func TestPluginManagerLoadPlugin(t *testing.T) {
 		Version: "1.0",
 		Entry:   "main.go",
 	}
-	data, _ := json.Marshal(info)
-	os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0644)
+	_ = writeWasmPlugin(pluginDir, info)
 
 	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
 	bus := event.NewEventBus(nil)
@@ -51,8 +54,7 @@ func TestPluginManagerLoadDuplicate(t *testing.T) {
 	os.MkdirAll(pluginDir, 0755)
 
 	info := PluginInfo{Name: "test", Version: "1.0"}
-	data, _ := json.Marshal(info)
-	os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0644)
+	_ = writeWasmPlugin(pluginDir, info)
 
 	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
 	bus := event.NewEventBus(nil)
@@ -66,14 +68,86 @@ func TestPluginManagerLoadDuplicate(t *testing.T) {
 	}
 }
 
+// TestManifestLimitsReachTheRunningPlugin is the regression test for the README
+// claim "per-plugin limits ... from config".
+//
+// PluginManager.build used to call Sandbox.NewWasmPlugin, which builds the
+// runtime from the sandbox-global config, so a manifest's own limits were parsed
+// into PluginInfo and then thrown away: the plugin silently ran with the
+// sandbox's caps. A plugin that asked for 1 MiB of output got the sandbox's
+// 64 MiB.
+func TestManifestLimitsReachTheRunningPlugin(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	pluginDir := filepath.Join(tmpDir, "quiet")
+
+	// The sandbox allows 64 MiB of output; the plugin below asks for 1.
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{MaxMemoryMB: 256, MaxCPUSeconds: 30, MaxOutputMB: 64})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	mgr, err := NewPluginManager(s, bus, tmpDir)
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+
+	if err := writeWasmPlugin(pluginDir, PluginInfo{
+		Name:    "quiet",
+		Version: "1.0",
+		Limits:  sandbox.WasmLimits{MemoryMB: 128, MaxCPUSeconds: 30, MaxOutputMB: 1},
+	}); err != nil {
+		t.Fatalf("write plugin: %v", err)
+	}
+
+	if err := mgr.LoadPlugin(ctx, pluginDir); err != nil {
+		t.Fatalf("load plugin: %v", err)
+	}
+
+	// hello.wasm echoes stdin to stdout, so 2 MiB in is ~2 MiB out. The
+	// manifest's 1 MiB cap must bite; the sandbox's 64 MiB must not rescue it.
+	_, err = s.Execute(ctx, "quiet", bytes.Repeat([]byte("x"), 2<<20), skill.SkillContext{})
+	if !errors.Is(err, lwerrors.ErrSandboxOversized) {
+		t.Fatalf("the manifest's 1 MiB output cap must stop a 2 MiB echo, got %v", err)
+	}
+}
+
+// TestManifestLimitsAreTheCeilingNotTheFloor pins the other half of the rule:
+// a manifest that declares no limits inherits the sandbox's.
+func TestManifestLimitsAreTheCeilingNotTheFloor(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{MaxMemoryMB: 256, MaxCPUSeconds: 30, MaxOutputMB: 2})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	mgr, err := NewPluginManager(s, bus, tmpDir)
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+
+	// No limits block at all: the plugin gets the sandbox's budget.
+	if err := writeWasmPlugin(filepath.Join(tmpDir, "plain"), PluginInfo{Name: "plain", Version: "1.0"}); err != nil {
+		t.Fatalf("write plugin: %v", err)
+	}
+	if err := mgr.LoadPlugin(ctx, filepath.Join(tmpDir, "plain")); err != nil {
+		t.Fatalf("load plugin: %v", err)
+	}
+
+	// The sandbox's 2 MiB output cap still applies to a plugin that declared none.
+	_, err = s.Execute(ctx, "plain", bytes.Repeat([]byte("x"), 3<<20), skill.SkillContext{})
+	if !errors.Is(err, lwerrors.ErrSandboxOversized) {
+		t.Fatalf("the sandbox cap must still apply, got %v", err)
+	}
+}
+
 func TestPluginManagerUnloadPlugin(t *testing.T) {
 	tmpDir := t.TempDir()
 	pluginDir := filepath.Join(tmpDir, "test-plugin")
 	os.MkdirAll(pluginDir, 0755)
 
 	info := PluginInfo{Name: "test", Version: "1.0"}
-	data, _ := json.Marshal(info)
-	os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0644)
+	_ = writeWasmPlugin(pluginDir, info)
 
 	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
 	bus := event.NewEventBus(nil)
@@ -110,8 +184,7 @@ func TestPluginManagerGetPlugin(t *testing.T) {
 	os.MkdirAll(pluginDir, 0755)
 
 	info := PluginInfo{Name: "test", Version: "1.0", Description: "test plugin"}
-	data, _ := json.Marshal(info)
-	os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0644)
+	_ = writeWasmPlugin(pluginDir, info)
 
 	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
 	bus := event.NewEventBus(nil)
@@ -163,10 +236,12 @@ func TestPluginManagerLoadAllPlugins(t *testing.T) {
 
 	infoA := PluginInfo{Name: "plugin-a", Version: "1.0"}
 	infoB := PluginInfo{Name: "plugin-b", Version: "2.0"}
-	dataA, _ := json.Marshal(infoA)
-	dataB, _ := json.Marshal(infoB)
-	os.WriteFile(filepath.Join(pluginsDir, "plugin-a", "plugin.json"), dataA, 0644)
-	os.WriteFile(filepath.Join(pluginsDir, "plugin-b", "plugin.json"), dataB, 0644)
+	if err := writeWasmPlugin(filepath.Join(pluginsDir, "plugin-a"), infoA); err != nil {
+		t.Fatalf("write plugin-a: %v", err)
+	}
+	if err := writeWasmPlugin(filepath.Join(pluginsDir, "plugin-b"), infoB); err != nil {
+		t.Fatalf("write plugin-b: %v", err)
+	}
 
 	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
 	bus := event.NewEventBus(nil)
@@ -206,8 +281,7 @@ func TestConcurrentLoadPlugin(t *testing.T) {
 			pluginDir := filepath.Join(tmpDir, fmt.Sprintf("plugin-%d", idx))
 			os.MkdirAll(pluginDir, 0755)
 			info := PluginInfo{Name: fmt.Sprintf("plugin-%d", idx), Version: "1.0"}
-			data, _ := json.Marshal(info)
-			os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0644)
+			_ = writeWasmPlugin(pluginDir, info)
 			_ = mgr.LoadPlugin(context.Background(), pluginDir)
 		}(i)
 	}
@@ -235,8 +309,7 @@ func TestConcurrentUnloadPlugin(t *testing.T) {
 		pluginDir := filepath.Join(tmpDir, fmt.Sprintf("plugin-%d", i))
 		os.MkdirAll(pluginDir, 0755)
 		info := PluginInfo{Name: fmt.Sprintf("plugin-%d", i), Version: "1.0"}
-		data, _ := json.Marshal(info)
-		os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0644)
+		_ = writeWasmPlugin(pluginDir, info)
 		_ = mgr.LoadPlugin(context.Background(), pluginDir)
 	}
 
@@ -275,8 +348,7 @@ func TestConcurrentListPlugins(t *testing.T) {
 		pluginDir := filepath.Join(tmpDir, fmt.Sprintf("plugin-%d", i))
 		os.MkdirAll(pluginDir, 0755)
 		info := PluginInfo{Name: fmt.Sprintf("plugin-%d", i), Version: "1.0"}
-		data, _ := json.Marshal(info)
-		os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0644)
+		_ = writeWasmPlugin(pluginDir, info)
 		_ = mgr.LoadPlugin(context.Background(), pluginDir)
 	}
 
@@ -319,8 +391,7 @@ func TestConcurrentMixedOperations(t *testing.T) {
 			pluginDir := filepath.Join(tmpDir, pluginName)
 			os.MkdirAll(pluginDir, 0755)
 			info := PluginInfo{Name: pluginName, Version: "1.0"}
-			data, _ := json.Marshal(info)
-			os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0644)
+			_ = writeWasmPlugin(pluginDir, info)
 
 			// 加载插件
 			_ = mgr.LoadPlugin(context.Background(), pluginDir)
@@ -331,4 +402,185 @@ func TestConcurrentMixedOperations(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// ---- Additional coverage tests ----
+
+// TestWithSkillRegistry 验证 WithSkillRegistry 选项设置技能注册表。
+func TestWithSkillRegistry(t *testing.T) {
+	tmpDir := t.TempDir()
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	reg := skill.NewSkillRegistry()
+	mgr, err := NewPluginManager(s, bus, tmpDir, WithSkillRegistry(reg))
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+
+	if mgr.SkillRegistry() != reg {
+		t.Error("expected SkillRegistry to match")
+	}
+}
+
+// TestSkillRegistryDefaultNil 验证默认情况下 SkillRegistry 为 nil。
+func TestSkillRegistryDefaultNil(t *testing.T) {
+	tmpDir := t.TempDir()
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	mgr, err := NewPluginManager(s, bus, tmpDir)
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+
+	if mgr.SkillRegistry() != nil {
+		t.Error("expected nil SkillRegistry by default")
+	}
+}
+
+// TestLoadPluginWithSkillDependency 验证插件技能依赖检查。
+func TestLoadPluginWithSkillDependency(t *testing.T) {
+	tmpDir := t.TempDir()
+	pluginDir := filepath.Join(tmpDir, "needs-llm")
+	os.MkdirAll(pluginDir, 0755)
+
+	// Plugin requires "llm.chat" skill
+	info := PluginInfo{Name: "needs-llm", Version: "1.0", Skills: []string{"llm.chat"}}
+	_ = writeWasmPlugin(pluginDir, info)
+
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	// Create registry with llm.chat skill registered
+	reg := skill.NewSkillRegistry()
+	reg.Register(skill.SkillDefinition{Name: "llm.chat", Version: "1.0"}, nil)
+	mgr, _ := NewPluginManager(s, bus, tmpDir, WithSkillRegistry(reg))
+
+	if err := mgr.LoadPlugin(context.Background(), pluginDir); err != nil {
+		t.Fatalf("load plugin with satisfied skill dependency: %v", err)
+	}
+}
+
+// TestLoadPluginMissingSkillDependency 验证缺失技能依赖时的错误。
+func TestLoadPluginMissingSkillDependency(t *testing.T) {
+	tmpDir := t.TempDir()
+	pluginDir := filepath.Join(tmpDir, "needs-llm")
+	os.MkdirAll(pluginDir, 0755)
+
+	info := PluginInfo{Name: "needs-llm", Version: "1.0", Skills: []string{"missing.skill"}}
+	_ = writeWasmPlugin(pluginDir, info)
+
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	// Empty registry - nothing registered
+	reg := skill.NewSkillRegistry()
+	mgr, _ := NewPluginManager(s, bus, tmpDir, WithSkillRegistry(reg))
+
+	if err := mgr.LoadPlugin(context.Background(), pluginDir); err == nil {
+		t.Error("expected error for missing skill dependency")
+	}
+}
+
+// TestLoadPluginInvalidJSON 验证无效 plugin.json 的错误处理。
+func TestLoadPluginInvalidJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	pluginDir := filepath.Join(tmpDir, "bad")
+	os.MkdirAll(pluginDir, 0755)
+	os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte("not json"), 0644)
+
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	mgr, _ := NewPluginManager(s, bus, tmpDir)
+	if err := mgr.LoadPlugin(context.Background(), pluginDir); err == nil {
+		t.Error("expected error for invalid plugin.json")
+	}
+}
+
+// TestLoadPluginMissingFile 验证 plugin.json 不存在时的错误处理。
+func TestLoadPluginMissingFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	pluginDir := filepath.Join(tmpDir, "empty")
+	os.MkdirAll(pluginDir, 0755)
+
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	mgr, _ := NewPluginManager(s, bus, tmpDir)
+	if err := mgr.LoadPlugin(context.Background(), pluginDir); err == nil {
+		t.Error("expected error for missing plugin.json")
+	}
+}
+
+// TestLoadAllPluginsEmptyDir 验证空插件目录不报错。
+func TestLoadAllPluginsEmptyDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	mgr, _ := NewPluginManager(s, bus, tmpDir)
+	if err := mgr.LoadAllPlugins(context.Background()); err != nil {
+		t.Fatalf("load all from empty dir: %v", err)
+	}
+
+	if len(mgr.ListPlugins()) != 0 {
+		t.Error("expected 0 plugins from empty dir")
+	}
+}
+
+// TestNewPluginManagerInvalidDir 验证无法创建目录时的错误处理。
+func TestNewPluginManagerInvalidDir(t *testing.T) {
+	s := sandbox.NewSandbox(sandbox.SandboxConfig{})
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+
+	// Use a path that can't be created (file blocks directory creation)
+	tmpDir := t.TempDir()
+	blockerPath := filepath.Join(tmpDir, "blocker")
+	os.WriteFile(blockerPath, []byte("blocking file"), 0644)
+	impossibleDir := filepath.Join(blockerPath, "subdir")
+
+	mgr, err := NewPluginManager(s, bus, impossibleDir)
+	if err == nil && mgr != nil {
+		// If creation succeeded, try DiscoverPlugins on the invalid dir
+		_, derr := mgr.DiscoverPlugins()
+		if derr == nil {
+			// On some platforms this may succeed - acceptable
+			t.Log("platform allows nested dirs under file - skipping")
+		}
+	}
+}
+
+// writeWasmPlugin writes a plugin directory that the loader will actually
+// accept: a real WebAssembly artifact plus a manifest pointing at it.
+//
+// The fixtures here used to write a manifest whose entry ("main.go") did not
+// exist. That was only possible because LoadPlugin wrapped every manifest in a
+// mock that loaded unconditionally, so "loaded" never meant "runnable".
+func writeWasmPlugin(dir string, info PluginInfo) error {
+	wasm, err := os.ReadFile(filepath.Join("testdata", "hello.wasm"))
+	if err != nil {
+		return fmt.Errorf("read testdata/hello.wasm: %w", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hello.wasm"), wasm, 0o644); err != nil {
+		return err
+	}
+	info.Entry = "hello.wasm"
+	data, err := json.Marshal(info)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "plugin.json"), data, 0o644)
 }

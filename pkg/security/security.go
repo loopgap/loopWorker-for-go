@@ -17,6 +17,10 @@ import (
 
 type Permission string
 
+// maxAuditEntries bounds the in-memory audit trail (drop-oldest) so a noisy
+// client cannot grow the heap without limit.
+const maxAuditEntries = 10000
+
 const (
 	PermRead    Permission = "read"
 	PermWrite   Permission = "write"
@@ -150,7 +154,8 @@ func (sm *SecurityManager) Authenticate(username, password string) (*Token, erro
 		CreatedAt: now,
 	}
 
-	sm.tokens[token.Value] = token
+	sm.pruneExpiredLocked()
+	sm.tokens[HashToken(token.Value)] = token
 	sm.recordAudit(user.ID, "authenticate", "auth", true, "")
 	return token, nil
 }
@@ -159,7 +164,7 @@ func (sm *SecurityManager) ValidateToken(tokenValue string) (*User, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	token, ok := sm.tokens[tokenValue]
+	token, ok := sm.tokens[HashToken(tokenValue)]
 	if !ok {
 		return nil, lwerrors.ErrTokenInvalid
 	}
@@ -188,7 +193,7 @@ func (sm *SecurityManager) Authorize(user *User, permission Permission) bool {
 func (sm *SecurityManager) RevokeToken(tokenValue string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	delete(sm.tokens, tokenValue)
+	delete(sm.tokens, HashToken(tokenValue))
 }
 
 func (sm *SecurityManager) GetAuditLog() []AuditEntry {
@@ -210,10 +215,22 @@ func (sm *SecurityManager) recordAudit(userID, action, resource string, success 
 		IP:        ip,
 	}
 	sm.auditLog = append(sm.auditLog, entry)
+	if len(sm.auditLog) > maxAuditEntries {
+		sm.auditLog = append(sm.auditLog[:0], sm.auditLog[len(sm.auditLog)-maxAuditEntries:]...)
+	}
+}
+
+func (sm *SecurityManager) pruneExpiredLocked() {
+	now := time.Now()
+	for key, token := range sm.tokens {
+		if now.After(token.ExpiresAt) {
+			delete(sm.tokens, key)
+		}
+	}
 }
 
 func generateID() string {
-	b := make([]byte, 16)
+	b := make([]byte, 32)
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }

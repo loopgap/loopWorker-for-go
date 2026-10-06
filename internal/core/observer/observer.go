@@ -2,6 +2,7 @@ package observer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"loopworker/pkg/event"
+	pkglogger "loopworker/pkg/logger"
 )
 
 type MetricType string
@@ -19,7 +21,25 @@ const (
 	MetricCounter   MetricType = "counter"
 	MetricGauge     MetricType = "gauge"
 	MetricHistogram MetricType = "histogram"
+
+	// Maximum number of traces/logs retained in memory before oldest are evicted.
+	maxTraces = 1000
+	maxLogs   = 5000
 )
+
+// unknownLabel is the label value used when an event carries no usable
+// discriminator. It is a fixed string, never per-event data, so it does not
+// create a new time series per task.
+const unknownLabel = "unknown"
+
+// workerLabel normalises a worker id for use as a label value. Worker ids come
+// from a bounded pool, unlike task ids and error strings.
+func workerLabel(workerID string) string {
+	if workerID == "" {
+		return unknownLabel
+	}
+	return workerID
+}
 
 type Metric struct {
 	Name      string            `json:"name"`
@@ -59,11 +79,9 @@ var (
 )
 
 func init() {
-	var err error
-	GlobalLogger, err = zap.NewProduction()
-	if err != nil {
-		panic(err)
-	}
+	// Use the project's global logger instead of creating a duplicate production logger.
+	// Callers that need a different logger can set GlobalLogger before NewObserver().
+	GlobalLogger = pkglogger.Get()
 }
 
 type Observer struct {
@@ -75,7 +93,7 @@ type Observer struct {
 	traces  []TraceSpan
 	logs    []LogEntry
 	mu      sync.RWMutex
-	logMu   sync.Mutex
+	logMu   sync.RWMutex
 	traceMu sync.RWMutex
 
 	// Prometheus Metrics
@@ -139,14 +157,61 @@ func NewObserver(eventBus *event.EventBus) *Observer {
 		[]string{"type"},
 	)
 
-	// Ignore register errors if called multiple times in tests
-	_ = prometheus.Register(o.tasksCreated)
-	_ = prometheus.Register(o.tasksStarted)
-	_ = prometheus.Register(o.tasksCompleted)
-	_ = prometheus.Register(o.tasksFailed)
-	_ = prometheus.Register(o.taskDuration)
+	o.registerCollectors()
 
 	return o
+}
+
+// registerCollectors publishes the metric vectors to the default registry.
+// A second Observer (tests, or a second server in one process) collides with the
+// first, and prometheus signals that with AlreadyRegisteredError. Discarding that
+// error leaves the new Observer incrementing collectors nobody gathers, so its
+// metrics silently disappear; reusing the already-registered collector keeps
+// every Observer writing to the same, visible series.
+func (o *Observer) registerCollectors() {
+	registry := prometheus.DefaultRegisterer
+
+	if existing, err := registerCounterVec(registry, o.tasksCreated); err == nil {
+		o.tasksCreated = existing
+	}
+	if existing, err := registerCounterVec(registry, o.tasksStarted); err == nil {
+		o.tasksStarted = existing
+	}
+	if existing, err := registerCounterVec(registry, o.tasksCompleted); err == nil {
+		o.tasksCompleted = existing
+	}
+	if existing, err := registerCounterVec(registry, o.tasksFailed); err == nil {
+		o.tasksFailed = existing
+	}
+	if existing, err := registerHistogramVec(registry, o.taskDuration); err == nil {
+		o.taskDuration = existing
+	}
+}
+
+func registerCounterVec(registry prometheus.Registerer, vec *prometheus.CounterVec) (*prometheus.CounterVec, error) {
+	if err := registry.Register(vec); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if errors.As(err, &already) {
+			if reused, ok := already.ExistingCollector.(*prometheus.CounterVec); ok {
+				return reused, nil
+			}
+		}
+		return nil, fmt.Errorf("register counter vec: %w", err)
+	}
+	return vec, nil
+}
+
+func registerHistogramVec(registry prometheus.Registerer, vec *prometheus.HistogramVec) (*prometheus.HistogramVec, error) {
+	if err := registry.Register(vec); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if errors.As(err, &already) {
+			if reused, ok := already.ExistingCollector.(*prometheus.HistogramVec); ok {
+				return reused, nil
+			}
+		}
+		return nil, fmt.Errorf("register histogram vec: %w", err)
+	}
+	return vec, nil
 }
 
 func (o *Observer) Start(ctx context.Context) error {
@@ -207,7 +272,7 @@ func (o *Observer) handleEvent(evt event.Event) {
 			o.tasksCreated.WithLabelValues(payload.TaskType).Inc()
 			o.IncrementCounter("tasks.created", map[string]string{"type": payload.TaskType})
 		} else {
-			o.tasksCreated.WithLabelValues("unknown").Inc()
+			o.tasksCreated.WithLabelValues(unknownLabel).Inc()
 			o.IncrementCounter("tasks.created", nil)
 		}
 	case event.EventTaskStarted:
@@ -215,28 +280,28 @@ func (o *Observer) handleEvent(evt event.Event) {
 			o.tasksStarted.WithLabelValues(payload.WorkerID).Inc()
 			o.IncrementCounter("tasks.started", map[string]string{"worker": payload.WorkerID})
 		} else {
-			o.tasksStarted.WithLabelValues("unknown").Inc()
+			o.tasksStarted.WithLabelValues(unknownLabel).Inc()
 			o.IncrementCounter("tasks.started", nil)
 		}
 	case event.EventTaskCompleted:
+		// The result payload is deliberately NOT a label value: it is unique per
+		// task, so labelling by it creates one time series per completed task and
+		// the registry grows forever. Duration and count are the useful signals.
 		if payload, ok := evt.Payload().(event.TaskCompletedPayload); ok {
-			label := "unknown"
-			if resultStr, ok := payload.Result.(string); ok && resultStr != "" {
-				label = resultStr[:minInt(len(resultStr), 32)]
-			}
-			o.tasksCompleted.WithLabelValues(label).Inc()
-			o.taskDuration.WithLabelValues(label).Observe(payload.Duration.Seconds())
-			o.ObserveHistogram("task.duration", float64(payload.Duration.Milliseconds()), map[string]string{"label": label})
+			o.tasksCompleted.WithLabelValues(unknownLabel).Inc()
+			o.taskDuration.WithLabelValues(unknownLabel).Observe(payload.Duration.Seconds())
+			o.ObserveHistogram("task.duration", float64(payload.Duration.Milliseconds()), nil)
 		} else {
-			o.tasksCompleted.WithLabelValues("unknown").Inc()
+			o.tasksCompleted.WithLabelValues(unknownLabel).Inc()
 		}
 		o.IncrementCounter("tasks.completed", nil)
 	case event.EventTaskFailed:
+		// WorkerID, not the error text: the message is unique per failure.
 		if payload, ok := evt.Payload().(event.TaskFailedPayload); ok {
-			o.tasksFailed.WithLabelValues(payload.WorkerID).Inc()
+			o.tasksFailed.WithLabelValues(workerLabel(payload.WorkerID)).Inc()
 			o.IncrementCounter("tasks.failed", map[string]string{"worker": payload.WorkerID})
 		} else {
-			o.tasksFailed.WithLabelValues("unknown").Inc()
+			o.tasksFailed.WithLabelValues(unknownLabel).Inc()
 			o.IncrementCounter("tasks.failed", nil)
 		}
 	case event.EventTaskRetried:
@@ -291,10 +356,9 @@ func (o *Observer) handleEvent(evt event.Event) {
 		}
 	case event.EventResearchFinding:
 		if payload, ok := evt.Payload().(event.ResearchFindingPayload); ok {
-			o.IncrementCounter("research.findings", map[string]string{
-				"type":    payload.Type,
-				"task_id": payload.TaskID,
-			})
+			// Type only. TaskID/FindingID are unique per entity and would make
+			// one accumulator per finding in the in-memory map.
+			o.IncrementCounter("research.findings", map[string]string{"type": payload.Type})
 		} else {
 			o.IncrementCounter("research.findings", nil)
 		}
@@ -306,14 +370,12 @@ func (o *Observer) handleEvent(evt event.Event) {
 		o.IncrementCounter("workflows.failed", nil)
 	case event.EventWorkflowStepCompleted:
 		if payload, ok := evt.Payload().(event.WorkflowStepCompletedPayload); ok {
+			// Status only: WorkflowID is unique per run and would be unbounded.
 			status := "ok"
 			if !payload.Success {
 				status = "error"
 			}
-			o.IncrementCounter("workflow.steps.completed", map[string]string{
-				"workflow": payload.WorkflowID,
-				"status":   status,
-			})
+			o.IncrementCounter("workflow.steps.completed", map[string]string{"status": status})
 		} else {
 			o.IncrementCounter("workflow.steps.completed", nil)
 		}
@@ -441,6 +503,10 @@ func (o *Observer) StartTrace(operation string) *TraceSpan {
 
 	o.traceMu.Lock()
 	o.traces = append(o.traces, *span)
+	// Evict oldest traces to prevent unbounded memory growth.
+	if len(o.traces) > maxTraces {
+		o.traces = o.traces[len(o.traces)-maxTraces:]
+	}
 	o.traceMu.Unlock()
 
 	return span
@@ -487,6 +553,11 @@ func (o *Observer) Log(level, message string, fields map[string]interface{}) {
 
 	o.logs = append(o.logs, entry)
 
+	// Evict oldest logs to prevent unbounded memory growth.
+	if len(o.logs) > maxLogs {
+		o.logs = o.logs[len(o.logs)-maxLogs:]
+	}
+
 	var zapFields []zap.Field
 	for k, v := range fields {
 		zapFields = append(zapFields, zap.Any(k, v))
@@ -506,8 +577,8 @@ func (o *Observer) Log(level, message string, fields map[string]interface{}) {
 }
 
 func (o *Observer) GetLogs() []LogEntry {
-	o.logMu.Lock()
-	defer o.logMu.Unlock()
+	o.logMu.RLock()
+	defer o.logMu.RUnlock()
 
 	result := make([]LogEntry, len(o.logs))
 	copy(result, o.logs)
@@ -523,9 +594,9 @@ func (o *Observer) GetHealth() map[string]interface{} {
 	tracesCount := len(o.traces)
 	o.traceMu.RUnlock()
 
-	o.logMu.Lock()
+	o.logMu.RLock()
 	logsCount := len(o.logs)
-	o.logMu.Unlock()
+	o.logMu.RUnlock()
 
 	return map[string]interface{}{
 		"metrics_count": metricsCount,

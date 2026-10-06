@@ -1,9 +1,27 @@
+// Package event — Event type definitions and factory.
+//
+// Teaching Note: Event Sourcing Pattern
+// ======================================
+// Each EventType represents a discrete state transition in the system.
+// By naming events as "entity.verb" (e.g., "task.created"), we follow
+// the event sourcing convention that makes the event stream replayable.
+//
+// The payload structs are strongly typed (not map[string]interface{})
+// to catch type mismatches at compile time — a key Go idiom.
+//
+// Teaching Note: Object Pool Trade-off
+// =====================================
+// We intentionally DO NOT use sync.Pool for BaseEvent because:
+//  1. Events are retained in channels and indexes after creation
+//  2. Returning pooled events while references exist causes use-after-free
+//  3. GC handles short-lived allocations efficiently in Go
+//
+// This is a common mistake in Go — sync.Pool is NOT a general-purpose cache.
 package event
 
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"sync"
 	"time"
 )
 
@@ -48,23 +66,20 @@ type BaseEvent struct {
 	metadata  map[string]string
 }
 
-var baseEventPool = sync.Pool{
-	New: func() interface{} {
-		return &BaseEvent{}
-	},
-}
-
+// NewEvent creates a new event. Note: events may be retained in channels and
+// indexes after publishing, so sync.Pool is not safe here — the GC handles
+// short-lived event allocations efficiently.
 func NewEvent(eventType EventType, payload interface{}, metadata map[string]string) *BaseEvent {
 	if metadata == nil {
 		metadata = make(map[string]string)
 	}
-	e := baseEventPool.Get().(*BaseEvent)
-	e.id = generateID()
-	e.eventType = eventType
-	e.timestamp = time.Now()
-	e.payload = payload
-	e.metadata = metadata
-	return e
+	return &BaseEvent{
+		id:        generateID(),
+		eventType: eventType,
+		timestamp: time.Now(),
+		payload:   payload,
+		metadata:  metadata,
+	}
 }
 
 func (e *BaseEvent) ID() string                  { return e.id }

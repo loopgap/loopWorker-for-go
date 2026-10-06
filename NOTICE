@@ -1,0 +1,72 @@
+LoopWorker
+Copyright (c) 2026 the LoopWorker authors
+
+This product includes software developed by third parties. The full license
+text of every dependency ships inside the release archive: license texts go
+into `THIRD-PARTY-LICENSES/`, a one-line-per-dependency index goes into
+`THIRD-PARTY-NOTICES.csv`. Both are produced by the `third-party-notices` job
+in .github/workflows/ci.yml. This file records the attribution that the
+Apache-2.0 dependencies require, plus the direct dependency set as a whole.
+
+The Go standard library is used under the BSD-3-Clause license, Copyright
+2009 The Go Authors, and is not listed again below.
+
+--------------------------------------------------------------------------------
+Direct dependencies
+--------------------------------------------------------------------------------
+
+github.com/go-chi/chi/v5 v5.3.0
+  License: MIT
+  Copyright (c) 2015-present Peter Kieltyka, Google Inc.
+
+github.com/prometheus/client_golang v1.23.2
+  License: Apache-2.0
+  Copyright 2015 The Prometheus Authors
+
+github.com/prometheus/client_model v0.6.2
+  License: Apache-2.0
+  Copyright 2015 The Prometheus Authors
+
+github.com/spf13/cobra v1.10.2
+  License: Apache-2.0
+  Copyright 2013-2023 The Cobra Authors
+
+github.com/tetratelabs/wazero v1.12.0
+  License: Apache-2.0
+  Copyright 2020-2023 wazero authors
+
+go.uber.org/zap v1.28.0
+  License: MIT
+  Copyright (c) 2016-2024 Uber Technologies, Inc.
+
+go.yaml.in/yaml/v3 v3.0.4
+  License: MIT + Apache-2.0
+  Copyright (c) 2006-2010 Kirill Simonov
+  Copyright 2011-2016 Rob Pike, Nick Loadgoff
+  Copyright 2015-2017 Canonical Ltd.
+
+golang.org/x/crypto v0.55.0
+  License: BSD-3-Clause
+  Copyright 2009 The Go Authors
+
+modernc.org/sqlite v1.48.2
+  License: BSD-3-Clause
+  Copyright (c) 2017 The Sqlite Authors. All rights reserved.
+
+--------------------------------------------------------------------------------
+Notes
+--------------------------------------------------------------------------------
+
+- modernc.org/sqlite is a pure-Go transpilation of SQLite. It is used instead
+  of the CGO-based mattn/go-sqlite3 so that release binaries stay statically
+  linked and cross-compile without a C toolchain.
+- The Go standard library embeds the SQLite amalgamation headers under
+  LICENSE and sqlite3.h; those are covered by the public-domain dedication in
+  modernc.org/sqlite's BSD-3-Clause license.
+- Transitive dependencies are not listed individually here. `go list -m all`
+  enumerates the full module graph; the release workflow collects the license
+  text of each one into THIRD-PARTY-LICENSES/ and indexes them in
+  THIRD-PARTY-NOTICES.csv.
+- To regenerate the direct list above after changing go.mod, run
+  `go list -m -f '{{if not .Indirect}}{{.Path}} {{.Version}}{{end}}' all`
+  and read each module's LICENSE from $(go env GOMODCACHE).

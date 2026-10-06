@@ -280,7 +280,7 @@ func TestDefaultRoles(t *testing.T) {
 func TestConcurrentCreateUser(t *testing.T) {
 	sm := NewSecurityManager()
 	var wg sync.WaitGroup
-	n := 100
+	n := 20 // Reduced from 100 — bcrypt is CPU-intensive
 
 	// 并发创建用户
 	wg.Add(n)
@@ -312,9 +312,9 @@ func TestConcurrentAuthenticate(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	n := 100
+	n := 20
 
-	// 并发认证
+	// 并发认证 (bcrypt is CPU-intensive, reduced from 100)
 	wg.Add(n)
 	for i := 0; i < n; i++ {
 		go func(idx int) {
@@ -403,7 +403,7 @@ func TestConcurrentRevokeToken(t *testing.T) {
 func TestConcurrentMixedOperations(t *testing.T) {
 	sm := NewSecurityManager()
 	var wg sync.WaitGroup
-	n := 100
+	n := 20 // Reduced — bcrypt is CPU-intensive
 
 	// 并发混合操作
 	wg.Add(n)

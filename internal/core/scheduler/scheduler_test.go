@@ -852,3 +852,220 @@ func TestConcurrentStats(t *testing.T) {
 		t.Errorf("expected queued 0, got %d", stats["queued"])
 	}
 }
+
+// ---- Bridge and remaining coverage tests ----
+
+// TestSchedulerBridgeCreateTask 验证 SchedulerBridge 创建任务。
+func TestSchedulerBridgeCreateTask(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	s := NewScheduler(bus)
+	bridge := NewSchedulerBridge(s)
+
+	ref, err := bridge.CreateTask(context.Background(), "test", map[string]interface{}{"key": "val"}, []byte("input"))
+	if err != nil {
+		t.Fatalf("bridge create task: %v", err)
+	}
+	if ref.ID == "" {
+		t.Error("expected non-empty task ID")
+	}
+	if ref.Type != "test" {
+		t.Errorf("expected type 'test', got '%s'", ref.Type)
+	}
+	if ref.State != "pending" {
+		t.Errorf("expected state 'pending', got '%s'", ref.State)
+	}
+}
+
+// TestSchedulerBridgeGetTask 验证 SchedulerBridge 获取任务。
+func TestSchedulerBridgeGetTask(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	s := NewScheduler(bus)
+	bridge := NewSchedulerBridge(s)
+
+	task, _ := s.CreateTask(context.Background(), "test", nil, []byte("data"))
+	ref, exists := bridge.GetTask(task.ID)
+	if !exists {
+		t.Error("expected task to exist via bridge")
+	}
+	if ref.ID != task.ID {
+		t.Errorf("expected ID %s, got %s", task.ID, ref.ID)
+	}
+}
+
+// TestSchedulerBridgeGetTaskNotFound 验证不存在的任务返回 false。
+func TestSchedulerBridgeGetTaskNotFound(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	s := NewScheduler(bus)
+	bridge := NewSchedulerBridge(s)
+
+	_, exists := bridge.GetTask("nonexistent")
+	if exists {
+		t.Error("expected false for nonexistent task")
+	}
+}
+
+// TestSchedulerBridgeWaitForTask 验证 WaitForTask 在任务完成后返回。
+func TestSchedulerBridgeWaitForTask(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	s := NewScheduler(bus)
+	bridge := NewSchedulerBridge(s)
+
+	task, _ := s.CreateTask(context.Background(), "test", nil, nil)
+	_ = s.QueueTask(context.Background(), task.ID)
+	_ = s.StartTask(context.Background(), task.ID, "w1")
+
+	// Complete the task in a goroutine after a short delay
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_ = s.CompleteTask(context.Background(), task.ID, "w1", []byte("done"))
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	ref, err := bridge.WaitForTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("wait for task: %v", err)
+	}
+	if ref.State != "completed" {
+		t.Errorf("expected completed, got %s", ref.State)
+	}
+	if string(ref.Result) != "done" {
+		t.Errorf("expected result 'done', got '%s'", string(ref.Result))
+	}
+}
+
+// TestSchedulerBridgeWaitForTaskCancelled 验证上下文取消时 WaitForTask 返回。
+func TestSchedulerBridgeWaitForTaskCancelled(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	s := NewScheduler(bus)
+	bridge := NewSchedulerBridge(s)
+
+	task, _ := s.CreateTask(context.Background(), "test", nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := bridge.WaitForTask(ctx, task.ID)
+	if err == nil {
+		t.Error("expected error from cancelled context")
+	}
+}
+
+// TestSchedulerBridgeWaitForTaskNotFound 验证不存在的任务返回 not_found。
+func TestSchedulerBridgeWaitForTaskNotFound(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	s := NewScheduler(bus)
+	bridge := NewSchedulerBridge(s)
+
+	// The bridge polls GetTask - since task doesn't exist in DB, it returns not_found
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	ref, _ := bridge.WaitForTask(ctx, "nonexistent")
+	if ref != nil && ref.State != "not_found" {
+		t.Errorf("expected not_found state, got %s", ref.State)
+	}
+}
+
+// TestSaveTask 验证 SaveTask 公开方法。
+func TestSaveTask(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	s := NewScheduler(bus)
+
+	task, _ := s.CreateTask(context.Background(), "test", nil, nil)
+	task.Priority = PriorityCritical
+	s.SaveTask(task)
+
+	found, exists := s.GetTask(task.ID)
+	if !exists {
+		t.Fatal("task not found after save")
+	}
+	if found.Priority != PriorityCritical {
+		t.Errorf("expected critical priority after save, got %d", found.Priority)
+	}
+}
+
+// TestNotifyCh 验证 NotifyCh 返回可用通道。
+func TestNotifyCh(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	s := NewScheduler(bus)
+
+	ch := s.NotifyCh()
+	if ch == nil {
+		t.Error("expected non-nil notify channel")
+	}
+}
+
+// TestQueueTaskDependencyMet 验证依赖满足后任务自动入队。
+func TestQueueTaskDependencyMet(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	s := NewScheduler(bus)
+
+	t1, _ := s.CreateTask(context.Background(), "dep", nil, nil)
+	t2, _ := s.CreateTask(context.Background(), "task", nil, nil)
+	_ = s.AddDependency(context.Background(), t2.ID, t1.ID)
+
+	// Complete the dependency — this triggers unblockDependents which auto-queues t2
+	_ = s.QueueTask(context.Background(), t1.ID)
+	_ = s.StartTask(context.Background(), t1.ID, "w1")
+	_ = s.CompleteTask(context.Background(), t1.ID, "w1", nil)
+
+	// t2 should be automatically queued by unblockDependents
+	t2, _ = s.GetTask(t2.ID)
+	if t2.State != StateQueued {
+		t.Errorf("expected queued after dependency met, got %s", t2.State)
+	}
+}
+
+// TestListTasksWithLimit 验证 ListTasks 限制返回数量。
+func TestListTasksWithLimit(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	s := NewScheduler(bus)
+
+	for i := 0; i < 10; i++ {
+		_, _ = s.CreateTask(context.Background(), "test", nil, nil)
+	}
+
+	tasks := s.ListTasks(TaskFilter{Limit: 3})
+	if len(tasks) != 3 {
+		t.Errorf("expected 3 tasks with limit, got %d", len(tasks))
+	}
+}
+
+// TestAgentTaskConfig 验证 Agent 任务配置序列化/反序列化。
+func TestAgentTaskConfig(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	s := NewScheduler(bus)
+
+	task, _ := s.CreateTask(context.Background(), "agent", nil, nil)
+	task.IsAgent = true
+	task.AgentConfig = &AgentConfig{
+		SystemPrompt:   "You are helpful",
+		Model:          "gpt-4o",
+		ResponseSchema: `{"type": "object"}`,
+	}
+	s.SaveTask(task)
+
+	found, _ := s.GetTask(task.ID)
+	if !found.IsAgent {
+		t.Error("expected IsAgent=true")
+	}
+	if found.AgentConfig == nil {
+		t.Fatal("expected non-nil AgentConfig")
+	}
+	if found.AgentConfig.Model != "gpt-4o" {
+		t.Errorf("expected model 'gpt-4o', got '%s'", found.AgentConfig.Model)
+	}
+}

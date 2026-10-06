@@ -1,3 +1,22 @@
+// Package dispatcher matches tasks to available workers — the scheduling bridge.
+//
+// Architecture Pattern: Dispatcher with Worker Affinity
+// ======================================================
+// The Dispatcher sits between the Scheduler (task queue) and Executor (worker pool):
+//
+//	Scheduler.PriorityQueue ──► Dispatcher ──► Executor.WorkerPool
+//
+// The Dispatch() method:
+//  1. Finds an idle worker (O(n) scan, acceptable for small pools)
+//  2. Marks the worker as busy (prevents double-assignment)
+//  3. Dequeues the highest-priority task
+//  4. Hands the task to the worker via its task channel
+//
+// Teaching Note: Lock Ordering
+// ============================
+// The Dispatcher uses a single mutex for both workers map and task operations.
+// This simplifies reasoning about correctness but limits throughput under
+// extreme contention. For larger systems, consider sharded locks.
 package dispatcher
 
 import (
@@ -123,8 +142,19 @@ func (d *Dispatcher) Dispatch(ctx context.Context) (*scheduler.Task, *WorkerInfo
 	}
 
 	if err := d.provider.StartTask(ctx, task.ID, worker.ID); err != nil {
-		// 记录错误但不阻塞分发
-		logger.Warn("failed to start task", zap.String("taskID", task.ID), zap.Error(err))
+		// The task left the queue but never entered `running`, so the scheduler
+		// cannot transition it out of `queued` on its own. Record the failure
+		// before releasing the worker: dropping it here strands the task with no
+		// owner and shrinks the pool by one on every poison task.
+		if failErr := d.provider.FailTask(ctx, task.ID, worker.ID, "start task: "+err.Error()); failErr != nil {
+			logger.Error("task orphaned after failed start",
+				zap.String("taskID", task.ID),
+				zap.String("workerID", worker.ID),
+				zap.Error(err),
+				zap.Error(failErr))
+		}
+		d.MarkWorkerFree(worker.ID)
+		return nil, worker, fmt.Errorf("dispatch: start task %s: %w", task.ID, err)
 	}
 
 	return task, worker, nil

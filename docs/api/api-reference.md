@@ -47,17 +47,30 @@ http://localhost:19527/api/v1
 
 ## 认证
 
-### 获取 Token
+本节与 `pkg/api/openapi.json` 同源；该文件由 `TestOpenAPISpecMatchesRegisteredRoutes`
+与 `pkg/api/openapi_test.go` 双向锁定，路由漂移会让构建变红。
 
-**POST** `/api/v1/auth/login`
+**匿名可访问的端点只有三个**：`GET /healthz`、`GET /api/v1/health`、
+`GET /api/v1/openapi.json`。其余每个端点都需要凭据，缺凭据返回 `401`。
+
+### 发送 API Key
+
+```
+X-API-Key: lwk_...
+```
+
+启动时日志会打印一把一次性的 admin 密钥（仅当进程没有配置任何凭据时）。
+永久密钥来自环境变量 `LOOPWORKER_API_KEYS`（`id:role:sha256hex`），
+或运行时由 admin 签发。角色为 `admin` / `operator` / `viewer`。
+
+### 换取 Bearer Token
+
+**POST** `/api/v1/auth/token` （需要 admin 角色）
 
 请求：
 
 ```json
-{
-  "username": "admin",
-  "password": "password123"
-}
+{}
 ```
 
 响应：
@@ -66,8 +79,8 @@ http://localhost:19527/api/v1
 {
   "success": true,
   "data": {
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-    "expires_at": "2024-01-01T00:00:00Z"
+    "token": "lwt_...",
+    "expires_at": "2026-10-06T03:11:00Z"
   }
 }
 ```
@@ -77,8 +90,17 @@ http://localhost:19527/api/v1
 在请求头中添加：
 
 ```
-Authorization: Bearer <token>
+Authorization: Bearer lwt_...
 ```
+
+注意 token 前缀是 `lwt_`，与 API key 的 `lwk_` 不同。把 API key 放进
+`Authorization: Bearer` 会被拒绝（401）—— API key 只能走 `X-API-Key` 头。
+
+### 签发与吊销密钥
+
+**POST** `/api/v1/auth/keys** （admin，明文只在响应里出现一次）
+**GET** `/api/v1/auth/keys** （admin，列表不含密钥材料）
+**DELETE** `/api/v1/auth/keys/{keyID}` （admin，同时吊销该密钥签发的 token）
 
 ## 任务管理
 
@@ -218,34 +240,15 @@ Authorization: Bearer <token>
 
 ## 工作流管理
 
-### 创建工作流
+两个内置工作流在**零配置**下即可使用：`builtin.anomaly-review`（DAG：两条分支
+加一个 join，不��要插件）和 `builtin.plugin-smoke`（先准备负载，再在已加载的插件上跑一个真实任务）。
+也可以把 JSON/YAML 定义放进 `work_dir/workflows/`，同名定义会覆盖内置的。
 
-**POST** `/api/v1/workflows`
+注意路径是**单数** `/api/v1/workflow`（旧版文档写成 `workflows`，那是错的）。
 
-请求：
+### 列出工作流
 
-```json
-{
-  "name": "data-processing",
-  "description": "数据处理工作流",
-  "steps": [
-    {
-      "id": "step-1",
-      "name": "数据提取",
-      "type": "extract",
-      "config": {
-        "source": "database"
-      }
-    },
-    {
-      "id": "step-2",
-      "name": "数据转换",
-      "type": "transform",
-      "depends_on": ["step-1"]
-    }
-  ]
-}
-```
+**GET** `/api/v1/workflow/list`
 
 响应：
 
@@ -253,43 +256,60 @@ Authorization: Bearer <token>
 {
   "success": true,
   "data": {
-    "id": "workflow-1704067200000-1",
-    "name": "data-processing",
-    "status": "pending",
-    "created_at": "2024-01-01T00:00:00Z"
+    "total": 2,
+    "workflows": [
+      {
+        "id": "builtin.anomaly-review",
+        "status": "pending",
+        "step_order": ["verify", "steady", "spike"],
+        "steps": [
+          { "id": "steady", "depends_on": [], "runnable": true },
+          { "id": "spike", "depends_on": [], "runnable": true },
+          { "id": "verify", "depends_on": ["steady", "spike"], "runnable": true }
+        ]
+      }
+    ]
   }
 }
 ```
+
+`step_order` 是声明顺序，不是执行顺序 —— `verify` 声明在最前但只能最后跑。
 
 ### 执行工作流
 
-**POST** `/api/v1/workflows/{workflowId}/execute`
+**POST** `/api/v1/workflow/execute` （需要 execute 权限）
 
-请求：
+请求体**只接受 `workflow_id`**（多余字段返回 `400 UNKNOWN_FIELD`）：
 
 ```json
 {
-  "input": {
-    "date": "2024-01-01"
-  }
+  "workflow_id": "builtin.anomaly-review"
 }
 ```
 
-响应：
+响应是 **202 Accepted**（异步执行，不是 200）。**没有 `Location` 头**，
+轮询路径在 body 的 `poll` 字段里：
 
 ```json
 {
   "success": true,
   "data": {
-    "execution_id": "exec-1704067200000-1",
-    "status": "running"
-  }
+    "workflow_id": "builtin.anomaly-review",
+    "status": "executing",
+    "poll": "/api/v1/workflow/builtin.anomaly-review",
+    "message": "execution started; poll the workflow until status is completed or failed"
+  },
+  "timestamp": "2026-10-05T20:24:08.0878902Z",
+  "request_id": "1791231848087890200-2-f208d35a"
 }
 ```
+
+执行是异步的：202 只表示**已开始**，不表示已完成。轮询 `poll` 返回的那个路径
+直到 `status` 变成 `completed` 或 `failed`。
 
 ### 获取工作流状态
 
-**GET** `/api/v1/workflows/{workflowId}`
+**GET** `/api/v1/workflow/{workflowID}`
 
 响应：
 
@@ -297,20 +317,12 @@ Authorization: Bearer <token>
 {
   "success": true,
   "data": {
-    "id": "workflow-1704067200000-1",
+    "id": "wf-1",
     "name": "data-processing",
     "status": "completed",
     "steps": [
-      {
-        "id": "step-1",
-        "status": "completed",
-        "output": { ... }
-      },
-      {
-        "id": "step-2",
-        "status": "completed",
-        "output": { ... }
-      }
+      { "id": "step-1", "status": "completed" },
+      { "id": "step-2", "status": "completed" }
     ],
     "started_at": "2024-01-01T00:00:00Z",
     "completed_at": "2024-01-01T00:00:05Z",
@@ -319,11 +331,49 @@ Authorization: Bearer <token>
 }
 ```
 
+### 依赖图
+
+**GET** `/api/v1/workflow/graph**
+
+返回任务依赖图。环检测在**这个 HTTP 边界**上做（迭代式遍历，
+成环时 `meta.cyclic_nodes` 报告而不打死进程）；`scheduler.AddDependency`
+自身只拒绝自环。
+
 ## 系统监控
+
+指标与日志**不在 API 端口上**。它们在仅监听 loopback 的 admin 监听器上
+（默认 `127.0.0.1:19528`，用 `server.admin_port` 或
+`LOOPWORKER_API_ADMIN_PORT` 修改），并且需要 admin 凭据。
+在 API 端口上访问 `/metrics` 会得到 404 —— 那一层只有 JSON 信封响应，
+Prometheus 文本端点放上去会让抓取器拿到无法解析的内容。
+
+admin 监听器上的路径：
+
+| 方法 | 路径 | 说明 | 格式 |
+|------|------|------|------|
+| GET | /metrics | Prometheus 指标 | Prometheus 文本 |
+| GET | /runtime/stats | 运行时统计（JSON） | JSON |
+| GET | /logs | 日志 | 见下 |
+| GET | /events/stats | 事件存储统计 | JSON |
+| GET | /healthz | 存活探针 | 文本 |
 
 ### 获取指标
 
-**GET** `/api/v1/metrics`
+**GET** `http://127.0.0.1:19528/metrics`
+
+```bash
+curl -H "X-API-Key: $API_KEY" http://127.0.0.1:19528/metrics
+```
+
+响应是 **Prometheus 文本格式**（`Content-Type: text/plain`），不是 JSON：
+
+```
+# HELP loopworker_tasks_completed_total Tasks that reached the completed state.
+# TYPE loopworker_tasks_completed_total counter
+loopworker_tasks_completed_total 950
+```
+
+JSON 形式的运行时数据用 `/runtime/stats`：
 
 响应：
 
@@ -360,7 +410,7 @@ Authorization: Bearer <token>
 
 ### 获取日志
 
-**GET** `/api/v1/logs`
+**GET** `http://127.0.0.1:19528/logs`
 
 查询参数：
 
@@ -405,7 +455,7 @@ Authorization: Bearer <token>
   "success": true,
   "data": {
     "status": "healthy",
-    "version": "1.0.0",
+    "version": "0.1.0-beta",
     "uptime": "24h",
     "components": {
       "scheduler": "healthy",
@@ -421,35 +471,50 @@ Authorization: Bearer <token>
 
 ### SSE 事件流
 
-**GET** `/events`
+**GET** `/api/v1/events/live`（需凭据）
 
-响应格式（Server-Sent Events）：
+响应头：`Content-Type: text/event-stream`、`Cache-Control: no-cache`、`X-Accel-Buffering: no`。
+
+第一帧总是打开确认，告诉客户端这个连接订阅了哪些类型：
 
 ```
-event: task.created
-data: {"id":"task-1704067200000-1","type":"echo","state":"pending"}
+event: stream.opened
+data: {"caller":"ops","types":13}
 
-event: task.started
-data: {"id":"task-1704067200000-1","worker_id":"worker-1"}
+: keep-alive
+
+event: task.created
+data: {"id":"task-1791212318568906700-1","type":"echo","state":"queued"}
 
 event: task.completed
-data: {"id":"task-1704067200000-1","output":"Echo: Hello, World!","duration":"1s"}
+data: {"id":"task-1791212318568906700-1","state":"completed","result":"hello from wasm: aGVsbG8=","worker_id":"worker-1","duration_ms":69}
 ```
 
-### 事件类型
+两个容易踩的点：
 
-| 事件类型 | 说明 |
-|----------|------|
-| task.created | 任务创建 |
-| task.started | 任务开始执行 |
-| task.completed | 任务完成 |
-| task.failed | 任务失败 |
-| task.cancelled | 任务取消 |
-| task.retried | 任务重试 |
-| worker.spawned | Worker启动 |
-| worker.exited | Worker退出 |
-| workflow.started | 工作流开始 |
-| workflow.completed | 工作流完成 |
+- **`data` 不是信封。** 它就是事件负载本身（与任务相关的负载会与任务视图合并）。没有 `success` / `data` / `request_id` 外层。
+- **`state` 的取值是 `queued` / `running` / `completed` / `failed` / `cancelled` / `dead_letter`**，没有 `pending`。任务刚创建时是 `queued`。
+
+### 订阅范围与过滤
+
+`?types=` 接受逗号分隔的类型名。不带该参数时默认订阅 13 种：
+
+```
+task.created  task.started  task.completed  task.failed  task.retried  task.cancelled
+plugin.executed  skill.invoked  research.finding
+workflow.step.completed  workflow.started  workflow.completed  workflow.failed
+```
+
+`?types=task` 是六个任务事件的简写。不认识的值返回 `400 INVALID_REQUEST`，并在 `details.allowed` 里列出全部合法名字。
+
+服务端记录的完整事件目录是 20 种 —— 上面 13 种之外，还有 `plugin.loaded`、`plugin.unloaded`、`worker.spawned`、`worker.exited`、`system.health`、`system.started`、`system.stopped`。**这 7 种不会出现在流上**，它们只写入磁盘上的事件存储（见 `GET /runtime/stats` 与 data 目录下的 `events/`）。
+
+### 配额与断连
+
+- 并发流有上限，按调用方与全局各一层（`api.max_streams_per_caller` / `api.max_streams_total`）。超限返回 `429 STREAM_LIMIT_REACHED` 并带 `Retry-After: 5`。
+- 客户端断开时订阅立刻释放，不需要客户端发取消请求。
+- 空闲连接每 `api.stream_keepalive`（默认 15s）收到一行 `: keep-alive` 注释帧。代理若缓冲响应，SSE 会失效 —— 这是 `X-Accel-Buffering: no` 存在的原因。
+- **其他调用方的任务事件不会泄露内容**，但仍会投递一帧 `{"hidden":true,"reason":"task_owned_by_another_caller","task_id":"..."}`。这是有意设计：事件确实发生，但内容不属于订阅者。用 `?types=` 收窄订阅范围可以避免这类帧。
 
 ## 错误处理
 
@@ -564,7 +629,7 @@ curl -X POST http://localhost:19527/api/v1/tasks \
 curl http://localhost:19527/api/v1/tasks/<task-id> \
   -H "Authorization: Bearer <token>"
 
-# 获取指标
-curl http://localhost:19527/api/v1/metrics \
-  -H "Authorization: Bearer <token>"
+# 获取指标（在 admin 监听器上，loopback only，需要 admin 凭据）
+curl http://127.0.0.1:19528/metrics \
+  -H "X-API-Key: <admin-key>"
 ```

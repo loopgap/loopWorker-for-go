@@ -1,7 +1,7 @@
 // Package main implements loopctl, the LoopWorker control CLI.
 //
-// loopctl is a command-line tool for managing LoopWorker server,
-// including task management, workflow control, and system monitoring.
+// loopctl drives a running loopworker server over HTTP: tasks and workflows.
+// Every endpoint it uses is registered by pkg/api — see docs/api/api-reference.md.
 //
 // Usage:
 //
@@ -11,18 +11,26 @@
 //
 //	task        Task management commands
 //	workflow    Workflow management commands
-//	config      Configuration management
 //	status      Show server status
+//	version     Print version information
 //	help        Help about any command
+//
+// Commands that are deliberately absent:
+//
+//	config      loopworker has no configuration endpoint. Inspect the server's
+//	            own view with `loopworker doctor` on the host, or GET
+//	            /runtime/stats on the admin listener.
+//	metrics     /metrics and /logs live on the separate admin listener and
+//	logs        /metrics is Prometheus text, not JSON. Use curl:
+//	            curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:19528/metrics
+//	workflow    There is no POST /api/v1/workflow. Workflows are registered
+//	create       in-process, not over HTTP.
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -38,8 +46,15 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "loopctl",
 	Short: "LoopWorker control CLI",
-	Long:  "A command-line tool for managing LoopWorker server, tasks, workflows, and configuration.",
+	Long:  "A command-line tool for managing LoopWorker server tasks and workflows.",
+	// Runtime failures (server down, 401, bad task id) are not usage errors;
+	// dumping the full usage block after them buries the actual message.
+	// SilenceUsage is set here rather than on the struct because cobra parses
+	// flags before PersistentPreRun: a bad flag still earns the usage block.
+	// main() prints the error itself, prefixed with the program name.
+	SilenceErrors: true,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		cmd.SilenceUsage = true
 		apiClient = lwclient.NewAPIClient(serverURL)
 	},
 }
@@ -182,33 +197,6 @@ var workflowListCmd = &cobra.Command{
 	},
 }
 
-var workflowCreateCmd = &cobra.Command{
-	Use:   "create",
-	Short: "Create a new workflow",
-	Long:  "Create a new workflow from a definition file.",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		file, _ := cmd.Flags().GetString("file")
-
-		data, err := os.ReadFile(file)
-		if err != nil {
-			return fmt.Errorf("read file: %w", err)
-		}
-
-		var workflowDef map[string]interface{}
-		if err := json.Unmarshal(data, &workflowDef); err != nil {
-			return fmt.Errorf("parse workflow definition: %w", err)
-		}
-
-		_, err = apiClient.Post("/api/v1/workflow", workflowDef)
-		if err != nil {
-			return fmt.Errorf("create workflow: %w", err)
-		}
-
-		fmt.Println("Workflow created successfully")
-		return nil
-	},
-}
-
 var workflowExecuteCmd = &cobra.Command{
 	Use:   "execute [workflow-id]",
 	Short: "Execute a workflow",
@@ -240,62 +228,6 @@ var workflowExecuteCmd = &cobra.Command{
 	},
 }
 
-var configCmd = &cobra.Command{
-	Use:   "config",
-	Short: "Configuration management",
-	Long:  "Commands for managing LoopWorker configuration.",
-}
-
-var configShowCmd = &cobra.Command{
-	Use:   "show",
-	Short: "Show current configuration",
-	Long:  "Display the current LoopWorker configuration.",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		body, err := apiClient.Get("/api/v1/config")
-		if err != nil {
-			fmt.Println("Current configuration:")
-			fmt.Println("  Port: 19527")
-			fmt.Println("  Plugins Dir: ~/.loopworker/plugins")
-			fmt.Println("  Data Dir: ~/.loopworker/data")
-			return nil
-		}
-
-		var config map[string]interface{}
-		if err := json.Unmarshal(body, &config); err != nil {
-			return fmt.Errorf("unmarshal config: %w", err)
-		}
-
-		jsonData, err := json.MarshalIndent(config, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshal config: %w", err)
-		}
-
-		fmt.Println(string(jsonData))
-		return nil
-	},
-}
-
-var configSetCmd = &cobra.Command{
-	Use:   "set [key] [value]",
-	Short: "Set configuration value",
-	Long:  "Set a configuration value.",
-	Args:  cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		key := args[0]
-		value := args[1]
-
-		data := map[string]interface{}{key: value}
-
-		_, err := apiClient.Post("/api/v1/config", data)
-		if err != nil {
-			return fmt.Errorf("set config: %w", err)
-		}
-
-		fmt.Printf("Configuration updated: %s = %s\n", key, value)
-		return nil
-	},
-}
-
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show server status",
@@ -316,46 +248,6 @@ var statusCmd = &cobra.Command{
 	},
 }
 
-var metricsCmd = &cobra.Command{
-	Use:   "metrics",
-	Short: "Show server metrics",
-	Long:  "Display the current metrics of the LoopWorker server.",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		metrics, err := apiClient.GetMetrics()
-		if err != nil {
-			return fmt.Errorf("get metrics: %w", err)
-		}
-
-		jsonData, err := json.MarshalIndent(metrics, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshal metrics: %w", err)
-		}
-
-		fmt.Println(string(jsonData))
-		return nil
-	},
-}
-
-var logsCmd = &cobra.Command{
-	Use:   "logs",
-	Short: "Show server logs",
-	Long:  "Display recent logs from the LoopWorker server.",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		logs, err := apiClient.GetLogs()
-		if err != nil {
-			return fmt.Errorf("get logs: %w", err)
-		}
-
-		jsonData, err := json.MarshalIndent(logs, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshal logs: %w", err)
-		}
-
-		fmt.Println(string(jsonData))
-		return nil
-	},
-}
-
 func init() {
 	// Task commands
 	taskListCmd.Flags().StringP("state", "s", "", "Filter by task state")
@@ -365,19 +257,20 @@ func init() {
 	taskCreateCmd.Flags().StringP("type", "t", "", "Task type (required)")
 	taskCreateCmd.Flags().StringP("input", "i", "", "Task input")
 	taskCreateCmd.Flags().IntP("priority", "p", 1, "Task priority (0-3)")
-	taskCreateCmd.MarkFlagRequired("type")
-
-	workflowCreateCmd.Flags().StringP("file", "f", "", "Workflow definition file (required)")
-	workflowCreateCmd.MarkFlagRequired("file")
+	_ = taskCreateCmd.MarkFlagRequired("type")
 
 	workflowExecuteCmd.Flags().StringP("input", "i", "", "Workflow input")
 
+	// The flag loopctl always needed: without it serverURL stayed "" and the
+	// only way to reach a non-default server was the LOOPWORKER_URL env var.
+	rootCmd.PersistentFlags().StringVar(&serverURL, "server", "",
+		"Server URL (default: $LOOPWORKER_URL, else http://localhost:19527)")
+
 	// Add subcommands
 	taskCmd.AddCommand(taskListCmd, taskCreateCmd, taskGetCmd, taskCancelCmd, taskDeleteCmd)
-	workflowCmd.AddCommand(workflowListCmd, workflowCreateCmd, workflowExecuteCmd)
-	configCmd.AddCommand(configShowCmd, configSetCmd)
+	workflowCmd.AddCommand(workflowListCmd, workflowExecuteCmd)
 
-	rootCmd.AddCommand(taskCmd, workflowCmd, configCmd, statusCmd, metricsCmd, logsCmd)
+	rootCmd.AddCommand(taskCmd, workflowCmd, statusCmd)
 
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "version",
@@ -389,19 +282,8 @@ func init() {
 }
 
 func main() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Handle graceful shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		cancel()
-	}()
-
-	if err := rootCmd.ExecuteContext(ctx); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, "loopctl: "+err.Error())
 		os.Exit(1)
 	}
 }

@@ -1,9 +1,9 @@
 {
   "name": "hello",
-  "version": "1.0.0",
-  "description": "A simple hello world plugin",
+  "version": "0.1.0-beta.1",
+  "description": "Echoes its input. The smallest plugin that proves the sandbox runs real WebAssembly.",
   "author": "LoopWorker",
-  "entry": "main.go",
+  "entry": "hello.wasm",
   "config": {
     "greeting": "Hello"
   }

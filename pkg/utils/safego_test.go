@@ -2,7 +2,10 @@ package utils
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	lwerrors "loopworker/pkg/errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -193,5 +196,74 @@ func TestGoSafeWithResult_Error(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for error")
+	}
+}
+
+func TestGoSafeE_DeliversPanic(t *testing.T) {
+	res := <-GoSafeE(context.Background(), func(ctx context.Context) (string, error) {
+		panic("boom")
+	})
+
+	var pe *PanicError
+	if !errors.As(res.Err, &pe) {
+		t.Fatalf("expected *PanicError, got %#v", res.Err)
+	}
+	if pe.Value != "boom" {
+		t.Errorf("expected panic value 'boom', got %v", pe.Value)
+	}
+	if !strings.Contains(pe.Error(), "boom") || !strings.Contains(pe.Stack, "safego_test.go") {
+		t.Errorf("expected panic value and stack, got %q / %q", pe.Error(), pe.Stack)
+	}
+	if res.Value != "" {
+		t.Errorf("expected zero value on panic, got %q", res.Value)
+	}
+	if !IsPanic(fmt.Errorf("wrapped: %w", res.Err)) {
+		t.Error("IsPanic should see a wrapped *PanicError")
+	}
+	if IsPanic(errors.New("plain")) {
+		t.Error("IsPanic must not match an ordinary error")
+	}
+}
+
+func TestGoSafeE_DeliversValueAndError(t *testing.T) {
+	res := <-GoSafeE(context.Background(), func(ctx context.Context) (int, error) {
+		return 42, nil
+	})
+	if res.Err != nil || res.Value != 42 {
+		t.Errorf("expected (42, nil), got (%d, %v)", res.Value, res.Err)
+	}
+
+	sentinel := errors.New("nope")
+	res = <-GoSafeE(context.Background(), func(ctx context.Context) (int, error) {
+		return 7, sentinel
+	})
+	if !errors.Is(res.Err, sentinel) || res.Value != 7 {
+		t.Errorf("expected (7, sentinel), got (%d, %v)", res.Value, res.Err)
+	}
+}
+
+// A panic must not be reported as a timeout by the caller of GoSafeE.
+func TestGoSafeE_PanicIsNotATimeout(t *testing.T) {
+	start := time.Now()
+	res := <-GoSafeE(context.Background(), func(ctx context.Context) (int, error) {
+		panic("immediate crash")
+	})
+	if IsPanic(res.Err) == false {
+		t.Fatalf("expected a panic classification, got %v", res.Err)
+	}
+	if errors.Is(res.Err, lwerrors.ErrTaskTimeout) {
+		t.Fatal("panic must not be reported as a timeout")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("panic took %v to report; must return immediately", elapsed)
+	}
+}
+
+func TestGoSafeWithTimeout_PanicIsTyped(t *testing.T) {
+	err := <-GoSafeWithTimeout(context.Background(), time.Second, func(ctx context.Context) {
+		panic("typed please")
+	})
+	if !IsPanic(err) {
+		t.Fatalf("expected *PanicError from GoSafeWithTimeout, got %#v", err)
 	}
 }

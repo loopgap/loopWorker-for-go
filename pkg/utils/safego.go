@@ -2,6 +2,7 @@ package utils
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync"
@@ -49,13 +50,64 @@ func getLogger() Logger {
 	return *globalLogger.Load().(*Logger)
 }
 
+// PanicError reports a panic that was recovered by a guarded goroutine.
+// It is returned as an error (never re-raised) so callers can classify a crash
+// separately from a timeout or an ordinary failure.
+type PanicError struct {
+	Value any    // the value passed to panic
+	Stack string // stack trace captured at recovery
+}
+
+func (e *PanicError) Error() string {
+	return fmt.Sprintf("panic recovered: %v\nstack trace: %s", e.Value, e.Stack)
+}
+
+// IsPanic reports whether err, or any error wrapped by it, is a recovered panic.
+func IsPanic(err error) bool {
+	var pe *PanicError
+	return errors.As(err, &pe)
+}
+
+// Result carries the outcome of a guarded goroutine: a value, or an error that
+// may be a *PanicError.
+type Result[T any] struct {
+	Value T
+	Err   error
+}
+
+// GoSafeE runs fn in a new goroutine and delivers exactly one Result on the
+// returned channel. Unlike GoSafe, a panic is not swallowed: it is delivered as
+// a *PanicError so the caller can return immediately and classify the failure.
+// The channel is buffered, so the guarded goroutine never blocks even if the
+// caller abandons it after a timeout.
+func GoSafeE[T any](ctx context.Context, fn func(context.Context) (T, error)) <-chan Result[T] {
+	ch := make(chan Result[T], 1)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err := &PanicError{Value: r, Stack: string(debug.Stack())}
+				getLogger().Printf("%v", err)
+				ch <- Result[T]{Err: err}
+			}
+		}()
+
+		value, err := fn(ctx)
+		ch <- Result[T]{Value: value, Err: err}
+	}()
+
+	return ch
+}
+
 // GoSafe runs the provided function in a new goroutine and recovers from panics.
 // This is the fundamental anti-crash primitive for the entire project.
+// Panics are logged but not reported to any caller; use GoSafeE when the caller
+// must observe the panic.
 func GoSafe(ctx context.Context, fn func(context.Context)) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				err := fmt.Errorf("panic recovered: %v\nstack trace: %s", r, string(debug.Stack()))
+				err := &PanicError{Value: r, Stack: string(debug.Stack())}
 				getLogger().Printf("%v", err)
 				// In a full integration, we would also emit an event to the EventBus or SelfHealer here
 			}
@@ -78,8 +130,7 @@ func GoSafeWithTimeout(ctx context.Context, timeout time.Duration, fn func(conte
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				stackTrace := string(debug.Stack())
-				err := fmt.Errorf("panic recovered: %v\nstack trace: %s", r, stackTrace)
+				err := &PanicError{Value: r, Stack: string(debug.Stack())}
 				getLogger().Printf("%v", err)
 				cancel()
 				errCh <- err
@@ -120,8 +171,7 @@ func GoSafeWithResult[T any](ctx context.Context, fn func(context.Context) (T, e
 
 		defer func() {
 			if r := recover(); r != nil {
-				stackTrace := string(debug.Stack())
-				err := fmt.Errorf("panic recovered: %v\nstack trace: %s", r, stackTrace)
+				err := &PanicError{Value: r, Stack: string(debug.Stack())}
 				getLogger().Printf("%v", err)
 				errCh <- err
 			}

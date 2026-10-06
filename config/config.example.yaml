@@ -3,9 +3,18 @@
 # Server settings
 server:
   port: 19527
-  host: "0.0.0.0"
+  # Port of the loopback-only observability listener (/metrics, /runtime/stats,
+  # /logs). Its host is not configurable: it stays on 127.0.0.1.
+  admin_port: 19528
+  # Loopback. The server refuses to serve a writable API on a public interface
+  # unless a credential is configured, so "0.0.0.0" here would make the server
+  # exit 1 on startup with a message about bind_address. Set it to 0.0.0.0 only
+  # together with a credential (security.api_key below, or LOOPWORKER_API_KEYS).
+  host: "127.0.0.1"
   read_timeout: 30s
-  write_timeout: 30s
+  # 0 means no write deadline, which is what keeps the event stream
+  # (/api/v1/events/live) alive. Raise it only if you never use that endpoint.
+  write_timeout: 0
 
 # Plugin settings
 plugins:

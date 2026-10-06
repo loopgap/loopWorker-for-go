@@ -1,3 +1,33 @@
+// Package executor implements the Worker Pool pattern — the execution engine of LoopWorker.
+//
+// Architecture Pattern: Worker Pool with Event-Driven Dispatch
+// =============================================================
+// The Executor manages a pool of Worker goroutines that execute tasks:
+//
+//	┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+//	│  Scheduler   │────►│  Dispatcher  │────►│   Worker 1  │
+//	│ (priority    │     │ (match task  │     │   Worker 2  │
+//	│  queue)      │     │  to worker)  │     │   Worker N  │
+//	└─────────────┘     └──────────────┘     └─────────────┘
+//	       ▲                                        │
+//	       └──────────(result/events)───────────────┘
+//
+// Design Decisions:
+//   - Workers are long-lived goroutines (not per-task goroutines) to avoid GC pressure
+//   - Each worker has a buffered task channel (capacity 1) for handoff
+//   - The central Run() loop is purely event-driven (no polling) using select{}
+//   - taskCancel() MUST be called at end of each iteration, not deferred in the loop
+//     (defer would only execute when the goroutine exits, leaking contexts)
+//
+// Teaching Note: Goroutine Lifecycle
+// ===================================
+// Each worker goroutine follows this lifecycle:
+//  1. IDLE: waiting on taskCh or stopCh
+//  2. BUSY: executing a task with timeout context
+//  3. STOPPED: stopCh closed, goroutine returns
+//
+// The doneCh channel ensures StopWorker() blocks until the goroutine has fully exited,
+// preventing resource leaks during graceful shutdown.
 package executor
 
 import (
@@ -259,9 +289,8 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 
 			start := time.Now()
 
-			// 创建任务超时context
+			// 创建任务超时context（每轮迭代独立cancel，避免defer在循环中积压）
 			taskCtx, taskCancel := context.WithTimeout(ctx, e.taskTimeout)
-			defer taskCancel()
 
 			// Execute task
 			var output []byte
@@ -391,17 +420,18 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 			}
 
 			elapsed := time.Since(start)
+			taskCancel() // 释放本轮taskCtx资源，不能defer（循环体内）
+
 			atomic.AddInt64(&worker.tasksRun, 1)
 			atomic.AddInt64(&e.stats.TotalTasksRun, 1)
 			atomic.AddInt64((*int64)(&e.stats.TotalExecTime), int64(elapsed))
-
-			worker.lastActive = time.Now()
 
 			atomic.StoreInt32(&worker.state, workerIdle)
 			atomic.AddInt32(&e.stats.IdleWorkers, 1)
 
 			worker.mu.Lock()
 			worker.currentTask = ""
+			worker.lastActive = time.Now()
 			worker.mu.Unlock()
 
 			// Mark worker as free in dispatcher and notify central loop
@@ -449,13 +479,25 @@ func (e *Executor) pumpQueue(ctx context.Context) {
 		worker, exists := e.workers[workerInfo.ID]
 		e.mu.RUnlock()
 
-		if exists {
+		if !exists {
+			// The worker vanished between Dispatch and here. The task is already
+			// dequeued and marked running, so it has to be failed explicitly or it
+			// sits in `running` until the watchdog kills it.
+			_ = e.dispatcher.FailTask(ctx, task.ID, workerInfo.ID, "worker disappeared before the task could be handed off")
+			continue
+		}
+
+		select {
+		case worker.taskCh <- task:
+			// Handed off.
+		default:
+			// The channel is full. This is back pressure, not a failure: the task
+			// is already dequeued and marked running, so failing it here burned a
+			// retry on work that never got a chance to run. Wait for room.
 			select {
 			case worker.taskCh <- task:
-				// Successfully handed off
-			default:
-				// Worker channel full, this shouldn't happen if dispatcher tracking is correct
-				_ = e.dispatcher.FailTask(ctx, task.ID, workerInfo.ID, "worker channel full unexpectedly")
+			case <-ctx.Done():
+				return
 			}
 		}
 	}
@@ -519,6 +561,8 @@ func (w *Worker) State() int32 {
 }
 
 func (w *Worker) LastActive() time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.lastActive
 }
 
@@ -540,20 +584,29 @@ func (e *Executor) StartWatchdog(ctx context.Context) {
 
 func (e *Executor) sweepZombies(ctx context.Context) {
 	e.mu.RLock()
-	var zombies []string
-	var currentTasks []string
+	type zombie struct {
+		workerID    string
+		currentTask string
+	}
+	var zombies []zombie
 	for id, worker := range e.workers {
 		// If worker is busy and hasn't updated lastActive in 60s
-		if atomic.LoadInt32(&worker.state) == workerBusy && time.Since(worker.lastActive) > 60*time.Second {
-			zombies = append(zombies, id)
-			worker.mu.Lock()
-			currentTasks = append(currentTasks, worker.currentTask)
-			worker.mu.Unlock()
+		if atomic.LoadInt32(&worker.state) != workerBusy {
+			continue
+		}
+		// lastActive and currentTask share worker.mu, so one lock covers both.
+		worker.mu.Lock()
+		stale := time.Since(worker.lastActive) > 60*time.Second
+		currentTask := worker.currentTask
+		worker.mu.Unlock()
+		if stale {
+			zombies = append(zombies, zombie{workerID: id, currentTask: currentTask})
 		}
 	}
 	e.mu.RUnlock()
 
-	for i, id := range zombies {
+	for _, z := range zombies {
+		id := z.workerID
 		logger.Warn("zombie worker detected, forcefully terminating", zap.String("workerID", id))
 		if err := e.StopWorker(ctx, id); err != nil {
 			// 记录错误但不阻塞watchdog
@@ -561,10 +614,10 @@ func (e *Executor) sweepZombies(ctx context.Context) {
 		}
 
 		// DeadLetter queue logic: mark the task as failed with Zombie status
-		if currentTasks[i] != "" {
-			if err := e.dispatcher.FailTask(ctx, currentTasks[i], id, "zombie task forcefully terminated by watchdog"); err != nil {
+		if z.currentTask != "" {
+			if err := e.dispatcher.FailTask(ctx, z.currentTask, id, "zombie task forcefully terminated by watchdog"); err != nil {
 				// 记录错误但不阻塞watchdog
-				logger.Warn("failed to fail task", zap.String("taskID", currentTasks[i]), zap.Error(err))
+				logger.Warn("failed to fail task", zap.String("taskID", z.currentTask), zap.Error(err))
 			}
 		}
 

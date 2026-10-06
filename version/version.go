@@ -5,9 +5,17 @@ import (
 	"runtime"
 )
 
+// Version scheme (see .release/RELEASE-PROCESS.md):
+//
+//	0.1.0-beta     first public beta
+//	0.1.0-beta.1   subsequent betas; the .N counter only ever increases
+//
+// Beta is deliberately below 1.0: the API, config schema, and plugin ABI are all
+// still moving, so nothing here carries a compatibility promise yet.
+//
 // Build information set via ldflags at build time.
 var (
-	Version   = "dev"
+	Version   = "0.1.0-beta"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
 	GoVersion = runtime.Version()

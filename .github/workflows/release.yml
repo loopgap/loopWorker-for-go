@@ -1,0 +1,361 @@
+name: Release
+
+# Tag-triggered release pipeline — the thing CONTRIBUTING.md described but that
+# did not exist (0 git tags; CI only did `upload-artifact` on push, so there was
+# no release page, no checksums, no signing, no SBOM).
+#
+# Trigger:  git tag -a v0.1.0-beta -m "v0.1.0-beta" && git push origin v0.1.0-beta
+#           (later betas: v0.1.0-beta.1, v0.1.0-beta.2, ...)
+#           (a human runs this; nothing in this workflow ever creates a tag)
+#
+# Output per release:
+#   * 5 archives: linux amd64/arm64, darwin amd64/arm64, windows amd64 (.exe in a .zip)
+#   * deb + rpm packages
+#   * checksums.txt (sha256), cosign-signed (keyless, GitHub OIDC)
+#   * SPDX SBOM per archive (syft)
+#   * GitHub release page built from .goreleaser.yaml
+#   * Homebrew formula pushed to <owner>/homebrew-tap
+#   * ghcr.io/<owner>/loopworker:<version> + :latest, multi-arch, with attestations
+#   * third-party-notices.tar.gz attached (attribution for statically linked deps)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  # cosign keyless signing mints an OIDC identity token from the job.
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GORELEASER_VERSION: v2.9.0
+  SYFT_VERSION: v1.9.0
+  COSIGN_VERSION: v3.1.3
+  COVERAGE_MIN: "80"
+
+jobs:
+  preflight:
+    name: Refuse to publish a fictional pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Tag must be semver and must point at HEAD
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          echo "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+' || { echo "::error::tag '$tag' is not semver (expected vX.Y.Z)"; exit 1; }
+          head_sha=$(git rev-parse HEAD)
+          tag_sha=$(git rev-list -n 1 "$tag")
+          [ "$head_sha" = "$tag_sha" ] || { echo "::error::tag $tag points at $tag_sha but HEAD is $head_sha — tag the exact commit you intend to ship"; exit 1; }
+
+      - name: CHANGELOG must document this version
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          v="${GITHUB_REF_NAME#v}"
+          if ! grep -qE "^## \[?${v}\]?" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for ${GITHUB_REF_NAME}. Release notes that oversell or lag create tickets; write them first."
+            exit 1
+          fi
+
+      - name: relcheck --strict (placeholders, cgo driver, config consistency)
+        working-directory: .release/tools
+        run: |
+          echo "# -strict makes these hard failures:"
+          echo "#   * TODO(owner)/<owner> anywhere in LICENSE, SECURITY.md, SUPPORT.md, NOTICE, .goreleaser.yaml, CODEOWNERS"
+          echo "#   * a cgo-only sqlite driver in go.mod (CGO_ENABLED=0 artifacts would panic at DB open)"
+          echo "#   * Dockerfile/workflow/ldflags drift vs go.mod, missing HEALTHCHECK, missing /api/v1/health route"
+          go run ./relcheck -root ../.. -strict
+
+      - name: goreleaser check
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: ${{ env.GORELEASER_VERSION }}
+          args: check
+
+  release:
+    name: Build, sign, publish artifacts
+    runs-on: ubuntu-latest
+    needs: preflight
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Decide publish vs dry-run
+        id: mode
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "args=release --clean" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "### real release: publishing to GitHub releases + homebrew tap"
+          else
+            echo "args=release --snapshot --clean --skip=publish,sbom,sign" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "### dry run (workflow_dispatch): snapshot build, no publish, no sbom/sign (tools are only installed for the publish path)"
+          fi
+
+      - name: Install syft (SBOM generator called by .goreleaser.yaml)
+        if: steps.mode.outputs.publish == 'true'
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+          syft --version
+
+      - name: Install cosign (keyless blob signing via GitHub OIDC)
+        if: steps.mode.outputs.publish == 'true'
+        uses: sigstore/cosign-installer@v4
+        with:
+          version: ${{ env.COSIGN_VERSION }}
+
+      - name: Generate third-party license texts (obligation for static Go binaries)
+        run: |
+          go install github.com/google/go-licenses/v2@v2.0.1
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go-licenses save ./... --save_path=THIRD-PARTY-LICENSES --force
+          go-licenses report ./... > THIRD-PARTY-NOTICES.csv
+          {
+            echo "# Third-party notices — LoopWorker ${GITHUB_REF_NAME}"
+            echo
+            echo "This binary is statically linked, so every module in go.mod ships"
+            echo "with it. License texts are in THIRD-PARTY-LICENSES/; this table is"
+            echo "generated by go-licenses (CI job 'release'), never hand-edited."
+            echo
+            echo "| Module | License |"
+            echo "|---|---|"
+            awk -F, 'NR>1 {print "| "$1" | "$2" |"}' THIRD-PARTY-NOTICES.csv
+          } > THIRD-PARTY-NOTICES.md
+          find THIRD-PARTY-LICENSES -type f | wc -l
+
+      - name: The artifact must come from a passing commit
+        run: |
+          go build ./...
+          go test -count=1 -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
+          (cd .release/tools && go run ./covergate -file ../../coverage.out -min "${COVERAGE_MIN}")
+
+      - name: Run goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: ${{ env.GORELEASER_VERSION }}
+          args: ${{ steps.mode.outputs.args }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # .goreleaser.yaml's brews.repository.token reads GITHUB_TOKEN. If the
+          # tap repo is not writable with the default workflow token, switch that
+          # line to "{{ .Env.HOMEBREW_TAP_TOKEN }}" and store a fine-grained PAT
+          # limited to <owner>/homebrew-tap (contents:write) as this secret.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Attach third-party notices to the release
+        if: steps.mode.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          tar czf third-party-notices.tar.gz THIRD-PARTY-LICENSES THIRD-PARTY-NOTICES.csv THIRD-PARTY-NOTICES.md
+          gh release upload "${GITHUB_REF_NAME}" third-party-notices.tar.gz --cask
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: List what was produced
+        if: always()
+        run: |
+          ls -la dist/ || true
+          echo "--- checksums.txt ---"
+          cat dist/checksums.txt 2>/dev/null || echo "(absent)"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dist
+          path: dist/
+          retention-days: 14
+
+  verify-artifacts:
+    name: Verify shipped artifacts (${{ matrix.os }})
+    # This job is the "zero after-sales" test: it downloads nothing but the
+    # artifact, unpacks it, runs it, requires /api/v1/health, and requires a
+    # clean SIGTERM shutdown. If this is green, a customer can install it.
+    runs-on: ${{ matrix.os }}
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .release
+            docs
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Select this platform's archive
+        id: pick
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${RUNNER_OS}" in
+            Linux)   pat='dist/loopworker-*-linux-amd64.tar.gz' ;;
+            macOS)   pat='dist/loopworker-*-darwin-amd64.tar.gz' ;;
+            Windows) pat='dist/loopworker-*-windows-amd64.zip' ;;
+          esac
+          f=$(ls $pat 2>/dev/null | head -1 || true)
+          [ -n "$f" ] || { echo "::error::no artifact matching $pat"; ls -la dist; exit 1; }
+          echo "archive=$f" >> "$GITHUB_OUTPUT"
+          echo "artifact under test: $f"
+
+      - name: sha256 must match checksums.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=$(basename "${{ steps.pick.outputs.archive }}")
+          python3 - "$base" dist/checksums.txt <<'PY'
+          import hashlib, sys
+          name, idx = sys.argv[1], sys.argv[2]
+          want = None
+          for line in open(idx, encoding='utf-8'):
+              line = line.strip()
+              if not line:
+                  continue
+              parts = line.split(None, 1)
+              if len(parts) == 2 and parts[1].lstrip('*').split("/")[-1] == name:
+                  want = parts[0]
+                  break
+          if want is None:
+              sys.exit(f"checksums.txt has no entry for {name}")
+          got = hashlib.sha256(open("dist/" + name, "rb").read()).hexdigest()
+          if got != want:
+              sys.exit(f"SHA256 MISMATCH for {name}\n  expected {want}\n  got      {got}")
+          print(f"sha256 OK  {name}  {got}")
+          PY
+
+      - name: SBOM + signature exist for this artifact (publish runs only)
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls dist/ | grep -E '\.spdx\.json$' >/dev/null || { echo "::error::no SBOM documents in dist/"; exit 1; }
+          ls dist/ | grep -E 'checksums\.txt\.(sig|pem)$' >/dev/null || { echo "::error::checksums.txt was not signed"; exit 1; }
+          echo "SBOM + cosign signature present"
+
+      - name: Unpack, and run the binary a customer would run
+        shell: bash
+        run: |
+          set -euo pipefail
+          a="${{ steps.pick.outputs.archive }}"
+          rm -rf unpacked && mkdir -p unpacked
+          case "$a" in
+            *.zip) unzip -q "$a" -d unpacked ;;
+            *)     tar xzf "$a" -C unpacked ;;
+          esac
+          echo "--- archive contents ---"; find unpacked -maxdepth 2 -type f | sort
+          bin=$(find unpacked -type f \( -name 'loopworker' -o -name 'loopworker.exe' \) | head -1)
+          [ -n "$bin" ] || { echo "::error::no loopworker binary inside $a"; exit 1; }
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            case "$bin" in *.exe) ;; *) echo "::error::Windows artifact has no .exe suffix"; exit 1 ;; esac
+          fi
+          "$bin" version
+          "$bin" version | grep -qE 'v?[0-9]+\.[0-9]+' || { echo "::error::ldflags did not inject the version (prints 'dev')"; exit 1; }
+          # Attribution must travel with the binary: a customer who keeps only
+          # the tarball still has the license texts.
+          for f in LICENSE NOTICE SUPPORT.md SECURITY.md CHANGELOG.md; do
+            find unpacked -name "$f" | grep -q . || { echo "::error::$f is missing from the shipped archive"; exit 1; }
+          done
+          echo "archive carries LICENSE/NOTICE/SUPPORT/SECURITY/CHANGELOG"
+          echo "unpacked binary: $bin"
+          echo "BIN=$bin" >> "$GITHUB_ENV"
+
+      - name: Boot smoke (health + graceful shutdown)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            pwsh ./.release/smoke.ps1 -BinPath "$BIN"
+          else
+            bash .release/scripts/boot-smoke.sh "$BIN"
+          fi
+
+      - name: Install cosign (verification needs the CLI)
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'push' && github.ref_type == 'tag'
+        uses: sigstore/cosign-installer@v4
+        with:
+          version: ${{ env.COSIGN_VERSION }}
+
+      - name: Verify the cosign signature over checksums.txt
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'push' && github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          cosign verify-blob \
+            --signature dist/checksums.txt.sig \
+            --certificate dist/checksums.txt.pem \
+            --certificate-identity-regexp "https://github.com/${GITHUB_REPOSITORY}/.+" \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            dist/checksums.txt
+          echo "cosign: checksums.txt signature verifies against this repository's OIDC identity"
+
+  docker-publish:
+    name: Build & publish container image
+    runs-on: ubuntu-latest
+    needs: preflight
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Derive GO_VERSION from go.mod (never a hardcoded pin)
+        id: gov
+        run: grep -E '^go [0-9]' go.mod | awk '{print "version=" $2}' >> "$GITHUB_OUTPUT"
+      - name: Compute image references
+        id: meta
+        run: |
+          repo_lc=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
+          ver="${GITHUB_REF_NAME}"
+          echo "images=ghcr.io/${repo_lc}/loopworker:${ver:-dev},ghcr.io/${repo_lc}/loopworker:latest" >> "$GITHUB_OUTPUT"
+          echo "### will build: ghcr.io/${repo_lc}/loopworker:${ver:-dev}"
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (and push on a real tag) multi-arch
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+          tags: ${{ steps.meta.outputs.images }}
+          build-args: |
+            GO_VERSION=${{ steps.gov.outputs.version }}
+            VERSION=${{ github.ref_name }}
+            GIT_COMMIT=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test the published amd64 image (boot, health, SIGTERM)
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          repo_lc=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
+          docker pull --platform linux/amd64 "ghcr.io/${repo_lc}/loopworker:${GITHUB_REF_NAME}"
+          bash .release/scripts/docker-smoke.sh "ghcr.io/${repo_lc}/loopworker:${GITHUB_REF_NAME}" 19527

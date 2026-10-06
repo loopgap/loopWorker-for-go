@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"loopworker/internal/core/sandbox"
@@ -23,6 +24,21 @@ type PluginInfo struct {
 	Entry       string            `json:"entry"`
 	Config      map[string]string `json:"config"`
 	Skills      []string          `json:"skills,omitempty"` // skills this plugin requires
+	// Limits is the plugin's own resource request. build() resolves it against
+	// the sandbox's configuration before the runtime is created - see build.
+	//
+	// A "sha256" field in the manifest is intentionally absent: nothing verifies
+	// it on this path, and whether a mismatch rejects the plugin or only warns
+	// is a product decision, not one to fake with a parsed-but-unused field.
+	Limits sandbox.WasmLimits `json:"limits"`
+
+	// Dir is the directory the plugin was loaded from. It is deliberately not
+	// part of the manifest: a directory name and a plugin name are independent
+	// (an operator can drop plugin "hello" into a folder called "smoke"), and
+	// the loader registers the plugin under Name. Anything that has to map a
+	// directory back to a plugin must read this field rather than assume the
+	// two are equal - assuming it cost a day of "plugin not found" dead letters.
+	Dir string `json:"-"`
 }
 
 // PluginManager manages plugin lifecycle: discovery, loading, unloading.
@@ -97,29 +113,76 @@ func (pm *PluginManager) LoadPlugin(ctx context.Context, pluginDir string) error
 	}
 	pm.mu.Unlock()
 
-	handler := func(ctx context.Context, input []byte, skillCtx skill.SkillContext) ([]byte, error) {
-		return nil, fmt.Errorf("%w: %s", lwerrors.ErrPluginInvalid, info.Name)
+	plugin, kind, err := pm.build(ctx, pluginDir, &info)
+	if err != nil {
+		return err
 	}
-
-	mockPlugin := sandbox.NewMockPlugin(info.Name, info.Version, handler)
-	if err := pm.sandbox.LoadPlugin(info.Name, mockPlugin); err != nil {
+	if err := pm.sandbox.LoadPlugin(info.Name, plugin); err != nil {
 		return fmt.Errorf("load into sandbox: %w", err)
 	}
 
 	pm.mu.Lock()
+	info.Dir = pluginDir
 	pm.loaded[info.Name] = &info
 	pm.mu.Unlock()
 
 	if pm.eventBus != nil {
 		pluginEvent := event.NewEvent(event.EventPluginLoaded, event.PluginLoadedPayload{
 			PluginID:   info.Name,
-			PluginType: "wasm",
+			PluginType: kind,
 			Version:    info.Version,
 		}, nil)
 		_ = pm.eventBus.Publish(ctx, pluginEvent)
 	}
 
 	return nil
+}
+
+// build turns a plugin manifest into something the sandbox can actually run,
+// and reports what it built so the load event can stop claiming "wasm" for
+// everything.
+//
+// Before this existed, LoadPlugin wrapped every manifest in a mock whose handler
+// failed unconditionally: loading succeeded, the plugin was listed as loaded, and
+// the plugin.loaded event said "wasm" — but the first execution returned
+// ErrPluginInvalid. The manifest's entry field was parsed and then ignored.
+func (pm *PluginManager) build(ctx context.Context, pluginDir string, info *PluginInfo) (sandbox.Plugin, string, error) {
+	entry := strings.TrimSpace(info.Entry)
+	if entry == "" {
+		return nil, "", fmt.Errorf("%w: %s declares no entry (want a .wasm artifact)",
+			lwerrors.ErrPluginInvalid, info.Name)
+	}
+
+	// plugin.json is untrusted input, so the entry must not escape its own
+	// directory: "../../somewhere/evil.wasm" is not a plugin.
+	path := filepath.Join(pluginDir, filepath.FromSlash(entry))
+	rel, err := filepath.Rel(pluginDir, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil, "", fmt.Errorf("%w: %s entry %q resolves outside its plugin directory",
+			lwerrors.ErrPluginInvalid, info.Name, entry)
+	}
+
+	if !strings.EqualFold(filepath.Ext(path), ".wasm") {
+		return nil, "", fmt.Errorf("%w: %s entry %q is not a .wasm artifact; this build executes WebAssembly plugins only",
+			lwerrors.ErrPluginInvalid, info.Name, entry)
+	}
+
+	wasm, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("read %s: %w", entry, err)
+	}
+
+	// The manifest's limits are this plugin's own request, so they go through
+	// NewWasmPluginWithLimits: a smaller declared limit wins, a larger one is
+	// clamped to the sandbox's, and an absent one inherits it. Calling
+	// NewWasmPlugin here (as this used to) applied the sandbox-global config to
+	// every plugin, which is why a manifest could declare any limit it liked and
+	// the plugin silently ran under the sandbox's numbers instead.
+	wp, err := pm.sandbox.NewWasmPluginWithLimits(ctx, info.Name, info.Version, wasm, info.Limits)
+	if err != nil {
+		return nil, "", fmt.Errorf("compile %s: %w", entry, err)
+	}
+	return wp, "wasm", nil
 }
 
 func (pm *PluginManager) UnloadPlugin(ctx context.Context, name string) error {
@@ -166,6 +229,22 @@ func (pm *PluginManager) ListPlugins() []*PluginInfo {
 	return plugins
 }
 
+// NameForDir returns the name a plugin loaded from dir is registered under, and
+// whether that directory produced a loaded plugin. Callers that hold a directory
+// (discovery, the startup report, doctor) must use this instead of the directory
+// base name: the registered name comes from the manifest, and the two differ
+// whenever an operator names a folder differently from the plugin inside it.
+func (pm *PluginManager) NameForDir(dir string) (string, bool) {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	for name, info := range pm.loaded {
+		if info.Dir == dir {
+			return name, true
+		}
+	}
+	return "", false
+}
+
 func (pm *PluginManager) DiscoverPlugins() ([]string, error) {
 	entries, err := os.ReadDir(pm.pluginsDir)
 	if err != nil {
@@ -186,17 +265,31 @@ func (pm *PluginManager) DiscoverPlugins() ([]string, error) {
 	return pluginDirs, nil
 }
 
+// LoadAllPlugins loads every discovered plugin.
+//
+// A plugin that cannot be loaded is reported but does not stop the others: one
+// bad manifest in the plugins directory must not take the server down with it.
+// The returned error names every failure so the caller can log all of them.
 func (pm *PluginManager) LoadAllPlugins(ctx context.Context) error {
 	dirs, err := pm.DiscoverPlugins()
 	if err != nil {
 		return fmt.Errorf("discover plugins: %w", err)
 	}
 
+	var failed []string
 	for _, dir := range dirs {
 		if err := pm.LoadPlugin(ctx, dir); err != nil {
-			return fmt.Errorf("load plugin from %s: %w", dir, err)
+			failed = append(failed, fmt.Sprintf("%s: %v", filepath.Base(dir), err))
 		}
 	}
 
-	return nil
+	switch len(failed) {
+	case 0:
+		return nil
+	case 1:
+		return fmt.Errorf("1 of %d plugins failed to load — %s", len(dirs), failed[0])
+	default:
+		return fmt.Errorf("%d of %d plugins failed to load — %s",
+			len(failed), len(dirs), strings.Join(failed, "; "))
+	}
 }

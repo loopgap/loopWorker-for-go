@@ -91,3 +91,40 @@ func TestNew(t *testing.T) {
 		t.Errorf("expected 'test error', got '%s'", err.Error())
 	}
 }
+
+// TestAs 验证 errors.As 匹配错误类型。
+func TestAs(t *testing.T) {
+	var target *testError
+	// As should return false for nil error
+	if As(nil, &target) {
+		t.Error("As(nil) should return false")
+	}
+
+	// As should match a concrete error type wrapped in fmt.Errorf
+	base := &testError{Code: 42, Msg: "not found"}
+	wrapped := Wrapf(base, "context")
+	if !As(wrapped, &target) {
+		t.Error("As should find testError in wrapped chain")
+	}
+	if target.Code != 42 {
+		t.Errorf("expected code 42, got %d", target.Code)
+	}
+
+	// As should return false for non-matching type
+	var otherTarget *otherError
+	if As(wrapped, &otherTarget) {
+		t.Error("As should not match otherError type")
+	}
+}
+
+// testError and otherError are test types for As matching.
+type testError struct {
+	Code int
+	Msg  string
+}
+
+func (e *testError) Error() string { return e.Msg }
+
+type otherError struct{ Detail string }
+
+func (e *otherError) Error() string { return e.Detail }

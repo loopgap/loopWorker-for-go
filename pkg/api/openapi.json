@@ -1,0 +1,409 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "LoopWorker API",
+    "version": "1.0.0",
+    "description": "Work-loop engine REST API. Every response uses one envelope: {success, data|error, timestamp, request_id}. Errors carry a stable machine-readable code plus a message that states the cause and the fix. Credentials: send 'X-API-Key: lwk_...' or 'Authorization: Bearer <token>'. A fresh install prints an ephemeral admin API key once at startup; permanent keys come from LOOPWORKER_API_KEYS or POST /api/v1/auth/keys.",
+    "contact": { "name": "LoopWorker self-service docs", "url": "http://localhost:19527/api/v1/openapi.json" }
+  },
+  "servers": [ { "url": "http://localhost:19527", "description": "local default" } ],
+  "security": [ { "ApiKeyHeader": [] }, { "BearerAuth": [] } ],
+  "tags": [
+    { "name": "auth", "description": "credential self-service" },
+    { "name": "tasks", "description": "task lifecycle" },
+    { "name": "workflow", "description": "workflow execution and graph" },
+    { "name": "system", "description": "health, discovery, streaming" },
+    { "name": "admin", "description": "separate loopback listener, default port 19528" }
+  ],
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "tags": ["system"], "operationId": "health", "security": [],
+        "summary": "Liveness plus queue depth",
+        "responses": { "200": { "description": "healthy", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessEnvelope" } } } } }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "tags": ["system"], "operationId": "liveness", "security": [],
+        "summary": "Payload-free liveness probe for orchestrators",
+        "responses": { "200": { "description": "alive" }, "503": { "description": "authentication configuration unusable" } }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "tags": ["system"], "operationId": "getOpenAPISpec", "security": [],
+        "summary": "This document",
+        "responses": { "200": { "description": "OpenAPI 3.0.3 JSON" } }
+      }
+    },
+    "/api/v1/auth/whoami": {
+      "get": {
+        "tags": ["auth"], "operationId": "whoami",
+        "summary": "Resolve the caller: subject, role, permissions",
+        "responses": {
+          "200": { "description": "caller identity", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessEnvelope" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/v1/auth/token": {
+      "post": {
+        "tags": ["auth"], "operationId": "createToken",
+        "summary": "Exchange an API key (or configured user) for a short-lived bearer token. Admin role required for key-based exchange.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TokenRequest" } } } },
+        "responses": {
+          "200": { "description": "bearer token", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/auth/keys": {
+      "post": {
+        "tags": ["auth"], "operationId": "createAPIKey",
+        "summary": "Issue a new API key (admin only). The plaintext is returned exactly once.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/KeyRequest" } } } },
+        "responses": {
+          "201": { "description": "key created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "get": {
+        "tags": ["auth"], "operationId": "listAPIKeys", "summary": "List keys without secret material (admin only)",
+        "responses": { "200": { "description": "keys" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/v1/auth/keys/{keyID}": {
+      "delete": {
+        "tags": ["auth"], "operationId": "revokeAPIKey", "summary": "Revoke a key and its bearer tokens (admin only)",
+        "parameters": [ { "$ref": "#/components/parameters/keyID" } ],
+        "responses": { "200": { "description": "revoked" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/v1/tasks": {
+      "get": {
+        "tags": ["tasks"], "operationId": "listTasks",
+        "summary": "Page tasks visible to the caller (non-admins see only their own tasks)",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 500, "default": 50 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "minimum": 0, "maximum": 100000, "default": 0 } },
+          { "name": "state", "in": "query", "schema": { "$ref": "#/components/schemas/TaskState" } },
+          { "name": "type", "in": "query", "schema": { "type": "string" } },
+          { "name": "priority", "in": "query", "schema": { "type": "integer", "minimum": 0, "maximum": 3 } }
+        ],
+        "responses": {
+          "200": { "description": "page of tasks", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskPageEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      },
+      "post": {
+        "tags": ["tasks"], "operationId": "createTask",
+        "summary": "Create and queue a task. Requires permission 'write'.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateTaskRequest" } } } },
+        "responses": {
+          "201": { "description": "created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "413": { "$ref": "#/components/responses/TooLarge" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/api/v1/tasks/{taskID}": {
+      "get": {
+        "tags": ["tasks"], "operationId": "getTask", "summary": "Read one task",
+        "parameters": [ { "$ref": "#/components/parameters/taskID" } ],
+        "responses": {
+          "200": { "description": "task", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskEnvelope" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "delete": {
+        "tags": ["tasks"], "operationId": "deleteTask", "summary": "Cancel a task (requires 'write')",
+        "parameters": [ { "$ref": "#/components/parameters/taskID" } ],
+        "responses": {
+          "200": { "description": "cancelled" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/api/v1/tasks/{taskID}/cancel": {
+      "post": {
+        "tags": ["tasks"], "operationId": "cancelTask", "summary": "Cancel a task (requires 'write')",
+        "parameters": [ { "$ref": "#/components/parameters/taskID" } ],
+        "responses": { "200": { "description": "cancelled" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" } }
+      }
+    },
+    "/api/v1/tasks/{taskID}/dependencies": {
+      "post": {
+        "tags": ["tasks"], "operationId": "addTaskDependency",
+        "summary": "Link a dependency. Self-edges and cycles are rejected with 409 DEPENDENCY_CYCLE before anything is stored.",
+        "parameters": [ { "$ref": "#/components/parameters/taskID" } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "required": ["dependency_id"], "additionalProperties": false,
+          "properties": { "dependency_id": { "type": "string", "description": "task id that must complete first" } }
+        } } } },
+        "responses": {
+          "200": { "description": "edge added" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "description": "DEPENDENCY_INVALID: the dependency can never complete", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } }
+        }
+      }
+    },
+    "/api/v1/workflow/graph": {
+      "get": {
+        "tags": ["workflow"], "operationId": "getWorkflowGraph",
+        "summary": "Canvas graph of the dependency DAG. Traversal is iterative and node-bounded, so cyclic data cannot crash the server.",
+        "responses": {
+          "200": { "description": "nodes, edges and meta", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GraphEnvelope" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/api/v1/workflow/list": {
+      "get": { "tags": ["workflow"], "operationId": "listWorkflows", "summary": "Registered workflows",
+        "responses": { "200": { "description": "workflows" }, "503": { "$ref": "#/components/responses/Unavailable" } } }
+    },
+    "/api/v1/workflow/{workflowID}": {
+      "get": { "tags": ["workflow"], "operationId": "getWorkflow", "summary": "One workflow with step statuses",
+        "parameters": [ { "$ref": "#/components/parameters/workflowID" } ],
+        "responses": { "200": { "description": "workflow" }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/api/v1/workflow/execute": {
+      "post": {
+        "tags": ["workflow"], "operationId": "executeWorkflow", "summary": "Start a workflow (requires 'execute'); returns 202 and is polled",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "required": ["workflow_id"], "additionalProperties": false,
+          "properties": { "workflow_id": { "type": "string" } }
+        } } } },
+        "responses": { "202": { "description": "executing" }, "404": { "$ref": "#/components/responses/NotFound" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/v1/workers": {
+      "get": { "tags": ["system"], "operationId": "listWorkers", "summary": "Worker pool state",
+        "responses": { "200": { "description": "workers" }, "503": { "$ref": "#/components/responses/Unavailable" } } }
+    },
+    "/api/v1/events/live": {
+      "get": {
+        "tags": ["system"], "operationId": "streamEventsLive",
+        "summary": "Server-Sent Events. Exempt from the request timeout; bounded per caller (429 STREAM_LIMIT_REACHED) and globally (503).",
+        "parameters": [ { "name": "types", "in": "query", "description": "comma separated event types, or 'task' for the six task events", "schema": { "type": "string" } } ],
+        "responses": {
+          "200": { "description": "text/event-stream frames: event: <type>\\ndata: <json>", "content": { "text/event-stream": { "schema": { "type": "string" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/metrics": {
+      "get": { "tags": ["admin"], "operationId": "prometheusMetrics", "summary": "Prometheus scrape endpoint - only on the admin listener (default 127.0.0.1:19528), admin role required",
+        "responses": { "200": { "description": "text/plain metrics" }, "401": { "$ref": "#/components/responses/Unauthorized" } } }
+    },
+    "/logs": {
+      "get": { "tags": ["admin"], "operationId": "adminLogs", "summary": "Observer log tail (admin listener only)",
+        "responses": { "200": { "description": "logs" }, "401": { "$ref": "#/components/responses/Unauthorized" } } }
+    },
+    "/runtime/stats": {
+      "get": { "tags": ["admin"], "operationId": "adminStats", "summary": "Counters, limits and stream usage (admin listener only)",
+        "responses": { "200": { "description": "stats" } } }
+    },
+    "/events/stats": {
+      "get": { "tags": ["admin"], "operationId": "adminEventStats", "summary": "Event bus and stream-slot counters (admin listener only)",
+        "responses": { "200": { "description": "bus counters" } } }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyHeader": { "type": "apiKey", "in": "header", "name": "X-API-Key", "description": "lwk_ prefixed key; stored as a SHA-256 digest" },
+      "BearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "lwt", "description": "HMAC-signed token from POST /api/v1/auth/token" }
+    },
+    "parameters": {
+      "taskID": { "name": "taskID", "in": "path", "required": true, "schema": { "type": "string" } },
+      "workflowID": { "name": "workflowID", "in": "path", "required": true, "schema": { "type": "string" } },
+      "keyID": { "name": "keyID", "in": "path", "required": true, "schema": { "type": "string" } }
+    },
+    "schemas": {
+      "TaskState": { "type": "string", "enum": ["pending", "queued", "running", "completed", "failed", "cancelled", "retrying", "dead_letter"] },
+      "ErrorCode": {
+        "type": "string",
+        "description": "Stable machine-readable error code. Never changes meaning.",
+        "enum": ["INVALID_REQUEST", "UNKNOWN_FIELD", "MALFORMED_JSON", "INPUT_ENCODING_INVALID", "REQUEST_TOO_LARGE",
+          "UNAUTHORIZED", "TOKEN_INVALID", "TOKEN_EXPIRED", "FORBIDDEN", "TASK_NOT_FOUND", "TASK_ALREADY_EXISTS",
+          "TASK_STATE_CONFLICT", "WORKFLOW_NOT_FOUND", "WORKER_NOT_FOUND", "PLUGIN_NOT_FOUND", "DEPENDENCY_CYCLE",
+          "DEPENDENCY_INVALID", "GRAPH_TOO_LARGE", "RATE_LIMITED", "STREAM_LIMIT_REACHED", "QUEUE_FULL", "NOT_FOUND",
+          "METHOD_NOT_ALLOWED", "STREAMING_UNSUPPORTED", "SERVICE_UNAVAILABLE", "INTERNAL_ERROR", "TIMEOUT"]
+      },
+      "ErrorBody": {
+        "type": "object",
+        "required": ["code", "message", "request_id"],
+        "properties": {
+          "code": { "$ref": "#/components/schemas/ErrorCode" },
+          "message": { "type": "string", "description": "Cause first, then 'Fix: ' with the repair step" },
+          "details": { "type": "object", "additionalProperties": true },
+          "request_id": { "type": "string" }
+        }
+      },
+      "SuccessEnvelope": {
+        "type": "object",
+        "required": ["success", "timestamp", "request_id"],
+        "properties": {
+          "success": { "type": "boolean", "enum": [true] },
+          "data": { "type": "object", "additionalProperties": true },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "request_id": { "type": "string" }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": ["success", "error", "timestamp", "request_id"],
+        "properties": {
+          "success": { "type": "boolean", "enum": [false] },
+          "error": { "$ref": "#/components/schemas/ErrorBody" },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "request_id": { "type": "string" }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "required": ["id", "type", "state", "priority", "created_at", "retry", "max_retry", "dependencies", "is_agent"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string" },
+          "state": { "$ref": "#/components/schemas/TaskState" },
+          "priority": { "type": "integer" },
+          "priority_name": { "type": "string", "enum": ["low", "normal", "high", "critical", "unknown"] },
+          "owner": { "type": "string", "description": "server-assigned subject id of the creating credential" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "started_at": { "type": "string", "format": "date-time" },
+          "ended_at": { "type": "string", "format": "date-time" },
+          "input": { "type": "string" },
+          "input_encoding": { "type": "string", "enum": ["text", "base64"] },
+          "result": { "type": "string" },
+          "result_encoding": { "type": "string", "enum": ["text", "base64"] },
+          "error": { "type": "string" },
+          "retry": { "type": "integer" },
+          "max_retry": { "type": "integer" },
+          "dependencies": { "type": "array", "items": { "type": "string" } },
+          "config": { "type": "object", "additionalProperties": true, "description": "secret-looking values are replaced with ***redacted***" },
+          "metadata": { "type": "object", "additionalProperties": { "type": "string" } },
+          "is_agent": { "type": "boolean" },
+          "agent_config": { "type": "object", "properties": { "system_prompt": { "type": "string" }, "model": { "type": "string" }, "schema": { "type": "string" } } }
+        }
+      },
+      "TaskEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "data": { "$ref": "#/components/schemas/Task" },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "request_id": { "type": "string" }
+        }
+      },
+      "TaskPageEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "data": {
+            "type": "object",
+            "properties": {
+              "tasks": { "type": "array", "items": { "$ref": "#/components/schemas/Task" } },
+              "limit": { "type": "integer" },
+              "offset": { "type": "integer" },
+              "total": { "type": "integer", "nullable": true, "description": "null when the store cannot count without materialising rows" },
+              "total_available": { "type": "boolean" },
+              "has_more": { "type": "boolean" },
+              "next_offset": { "type": "integer", "nullable": true },
+              "scope": { "type": "string", "enum": ["all", "own_tasks"] },
+              "generated_at": { "type": "string", "format": "date-time" }
+            }
+          },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "request_id": { "type": "string" }
+        }
+      },
+      "GraphEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "data": {
+            "type": "object",
+            "properties": {
+              "nodes": { "type": "array", "items": { "type": "object", "properties": {
+                "id": { "type": "string" }, "type": { "type": "string", "enum": ["wasmNode", "agentNode"] },
+                "position": { "type": "object", "properties": { "x": { "type": "number" }, "y": { "type": "number" } } },
+                "data": { "type": "object", "properties": { "label": { "type": "string" }, "task": { "$ref": "#/components/schemas/Task" }, "depth": { "type": "integer" }, "in_cycle": { "type": "boolean" } } }
+              } } },
+              "edges": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "source": { "type": "string" }, "target": { "type": "string" }, "animated": { "type": "boolean" } } } },
+              "meta": { "type": "object", "properties": {
+                "nodes": { "type": "integer" }, "edges": { "type": "integer" }, "max_nodes": { "type": "integer" },
+                "truncated": { "type": "boolean" }, "cyclic_nodes": { "type": "array", "items": { "type": "string" } },
+                "scope": { "type": "string" }, "generated_at": { "type": "string", "format": "date-time" }
+              } }
+            }
+          }
+        }
+      },
+      "CreateTaskRequest": {
+        "type": "object",
+        "required": ["type"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "type": "string", "maxLength": 255, "description": "loaded plugin name" },
+          "config": { "type": "object", "additionalProperties": true },
+          "metadata": { "type": "object", "additionalProperties": { "type": "string" }, "description": "the server-assigned lw_owner key is rejected" },
+          "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
+          "input": { "description": "plain text string (default), or a JSON object/array, or a base64 string when input_encoding=base64", "oneOf": [ { "type": "string" }, { "type": "object" }, { "type": "array" } ] },
+          "input_text": { "type": "string", "description": "explicit UTF-8 text input" },
+          "input_b64": { "type": "string", "description": "explicit RFC 4648 base64 input" },
+          "input_encoding": { "type": "string", "enum": ["text", "base64"], "default": "text" },
+          "is_agent": { "type": "boolean" },
+          "agent_config": { "type": "object", "properties": { "system_prompt": { "type": "string" }, "model": { "type": "string" }, "schema": { "type": "string" } } }
+        }
+      },
+      "TokenRequest": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "api_key": { "type": "string" },
+          "username": { "type": "string" },
+          "password": { "type": "string" },
+          "ttl": { "type": "string", "description": "Go duration, capped by the server token TTL" }
+        }
+      },
+      "KeyRequest": {
+        "type": "object", "required": ["name"], "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "maxLength": 64 },
+          "role": { "type": "string", "enum": ["viewer", "operator", "admin"], "default": "operator" },
+          "ttl": { "type": "string", "description": "optional Go duration after which the key stops validating" }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": { "description": "400 INVALID_REQUEST / MALFORMED_JSON / UNKNOWN_FIELD", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "Unauthorized": { "description": "401 UNAUTHORIZED / TOKEN_INVALID / TOKEN_EXPIRED", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "Forbidden": { "description": "403 FORBIDDEN with the missing permission in details", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "NotFound": { "description": "404 TASK_NOT_FOUND / WORKFLOW_NOT_FOUND / NOT_FOUND", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "Conflict": { "description": "409 TASK_STATE_CONFLICT / DEPENDENCY_CYCLE", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "TooLarge": { "description": "413 REQUEST_TOO_LARGE", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "RateLimited": { "description": "429 RATE_LIMITED / STREAM_LIMIT_REACHED with Retry-After", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "Unavailable": { "description": "503 SERVICE_UNAVAILABLE / QUEUE_FULL", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } }
+    }
+  }
+}

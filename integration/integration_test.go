@@ -265,20 +265,44 @@ func TestConcurrentTaskExecution(t *testing.T) {
 		_ = s.QueueTask(ctx, task.ID)
 	}
 
-	// Wait for completion by checking stats
-	deadline := time.Now().Add(5 * time.Second)
+	// Wait for every task to reach a terminal state.
+	//
+	// The invariant under test is "100 concurrent tasks are all accounted for",
+	// not "this machine runs 50 of them in five seconds": a throughput threshold
+	// makes the result depend on CI load and on -race, which is 10x slower. Polling
+	// for terminal states is also what a caller actually needs to know.
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		stats := e.GetStats()
-		if stats.TotalTasksRun >= 50 {
+		states := s.ListTasks(scheduler.TaskFilter{})
+		pending := 0
+		for _, task := range states {
+			switch task.State {
+			case scheduler.StateQueued, scheduler.StateRunning, scheduler.StatePending:
+				pending++
+			}
+		}
+		if len(states) == 100 && pending == 0 {
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 
-	stats := e.GetStats()
-	if stats.TotalTasksRun < 50 {
-		t.Errorf("expected at least 50 completed tasks, got %d", stats.TotalTasksRun)
+	states := s.ListTasks(scheduler.TaskFilter{})
+	byState := map[scheduler.TaskState]int{}
+	for _, task := range states {
+		byState[task.State]++
 	}
+	for state, n := range byState {
+		if state == scheduler.StateQueued || state == scheduler.StateRunning || state == scheduler.StatePending {
+			t.Errorf("%d task(s) still %s after 60s: concurrency lost a task", n, state)
+		}
+	}
+	if len(states) != 100 {
+		t.Errorf("expected 100 tasks to be accounted for, got %d", len(states))
+	}
+	stats := e.GetStats()
+	t.Logf("terminal states: %v; executor: run=%d failed=%d",
+		byState, stats.TotalTasksRun, stats.TotalTasksFailed)
 }
 
 func TestCircuitBreakerIntegration(t *testing.T) {

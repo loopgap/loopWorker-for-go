@@ -3,683 +3,328 @@ package api
 import (
 	"context"
 	"embed"
-	"encoding/json"
-	"fmt"
+	"errors"
+	"io/fs"
 	"net/http"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
+
+	"loopworker/version"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/render"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"go.uber.org/zap"
 	"loopworker/internal/core/executor"
 	"loopworker/internal/core/observer"
 	"loopworker/internal/core/scheduler"
-	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/event"
-	"loopworker/pkg/logger"
 	"loopworker/pkg/security"
-	"loopworker/pkg/utils"
 	"loopworker/pkg/workflow"
 )
 
 //go:embed all:dist
 var webCanvas embed.FS
 
-var requestIDCounter int64
+//go:embed openapi.json
+var openAPISpec []byte
 
-type APIResponse struct {
-	Success   bool        `json:"success"`
-	Data      interface{} `json:"data,omitempty"`
-	Error     string      `json:"error,omitempty"`
-	Timestamp time.Time   `json:"timestamp"`
-	RequestID string      `json:"request_id"`
-}
+// OpenAPISpecJSON is the machine-readable contract served at
+// GET /api/v1/openapi.json. CI and docs tooling can write it out verbatim.
+var OpenAPISpecJSON = append([]byte(nil), openAPISpec...)
 
+// APIServer owns the HTTP surface: routing, authN/authZ, rate limiting, the
+// error contract and the streaming endpoint.
 type APIServer struct {
-	Router      *chi.Mux
-	scheduler   *scheduler.Scheduler
-	wfe         *workflow.WorkflowEngine
-	executor    *executor.Executor
-	observer    *observer.Observer
-	eventBus    *event.EventBus
-	rateLimiter *security.RateLimiter
+	// Router is the chi mux to mount on an http.Server.
+	Router *chi.Mux
+
+	cfg     Config
+	deps    Dependencies
+	lister  TaskLister
+	auth    *security.Authenticator
+	streams *security.ConcurrencyLimiter
+	limits  *security.TieredRateLimiter
+	version string
+
+	// configError blocks all traffic when credentials could not be constructed,
+	// so a broken configuration never degrades into an open API.
+	configError error
+
+	closeOnce sync.Once
 }
 
-func NewAPIServer(sched *scheduler.Scheduler, exec *executor.Executor, bus *event.EventBus, wfe *workflow.WorkflowEngine, obs *observer.Observer) *APIServer {
-	r := chi.NewRouter()
-
-	// Security middlewares
-	r.Use(corsMiddleware)
-	r.Use(rateLimitMiddleware)
-	r.Use(requestIDMiddleware)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
-	r.Use(requestBodyLimitMiddleware)
-	r.Use(requestLoggingMiddleware)
-
-	api := &APIServer{
-		Router:      r,
-		scheduler:   sched,
-		wfe:         wfe,
-		executor:    exec,
-		observer:    obs,
-		eventBus:    bus,
-		rateLimiter: security.NewRateLimiter(100, time.Minute),
+// NewAPIServer wires the API server over the core components. It always returns
+// a server; an unusable configuration produces a fail-closed server whose routes
+// answer 503 with the repair hint (see APIServer.ConfigError).
+func NewAPIServer(
+	sched *scheduler.Scheduler,
+	exec *executor.Executor,
+	bus *event.EventBus,
+	wfe *workflow.WorkflowEngine,
+	obs *observer.Observer,
+	opts ...Option,
+) *APIServer {
+	deps := Dependencies{}
+	if sched != nil {
+		deps.Tasks = sched
+		deps.Lister = sched
 	}
-
-	api.registerRoutes()
-	return api
-}
-
-// CORS middleware with configurable allowed origins
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		allowedOrigins := []string{"*"}
-
-		for _, allowed := range allowedOrigins {
-			if allowed == "*" || allowed == origin {
-				w.Header().Set("Access-Control-Allow-Origin", allowed)
-				break
-			}
-		}
-
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
-		w.Header().Set("Access-Control-Max-Age", "86400")
-
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
-
-// rateLimitMiddleware limits requests per IP using the security.RateLimiter.
-// Returns 429 Too Many Requests when the client exceeds the rate limit.
-func rateLimitMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			ip = xff
-		}
-		if !DefaultRateLimiter.Allow(ip) {
-			w.Header().Set("Retry-After", "60")
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// DefaultRateLimiter is the global rate limiter shared by all API handlers.
-// It allows 100 requests per minute per IP.
-var DefaultRateLimiter = security.NewRateLimiter(100, time.Minute)
-
-// requestIDMiddleware ensures every request has a unique identifier
-func requestIDMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestID := r.Header.Get("X-Request-ID")
-		if requestID == "" {
-			requestID = fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddInt64(&requestIDCounter, 1))
-		}
-		ctx := context.WithValue(r.Context(), "request_id", requestID)
-		w.Header().Set("X-Request-ID", requestID)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-// requestBodyLimitMiddleware limits request body size to 10MB
-func requestBodyLimitMiddleware(next http.Handler) http.Handler {
-	const maxBodySize = 10 << 20 // 10MB
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
-		next.ServeHTTP(w, r)
-	})
-}
-
-// requestLoggingMiddleware logs all incoming requests
-func requestLoggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-
-		// Wrap response writer to capture status code
-		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-
-		next.ServeHTTP(rw, r)
-
-		duration := time.Since(start)
-
-		logger.Info("request",
-			zap.String("method", r.Method),
-			zap.String("path", r.URL.Path),
-			zap.Int("status", rw.statusCode),
-			zap.Duration("duration", duration))
-	})
-}
-
-// responseWriter wraps http.ResponseWriter to capture status code
-type responseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
-}
-
-func (s *APIServer) registerRoutes() {
-	s.Router.Route("/api/v1", func(r chi.Router) {
-		r.Get("/health", s.healthCheck)
-		r.Get("/workflow/graph", s.getWorkflowGraph)
-		r.Get("/workflow/list", s.listWorkflows)
-
-		r.Post("/workflow/execute", s.executeWorkflow)
-		r.Get("/events/live", s.streamEventsLive)
-		r.Get("/metrics", s.getMetrics)
-		r.Get("/logs", s.getLogs)
-
-		r.Route("/tasks", func(r chi.Router) {
-			r.Get("/", s.listTasks)
-			r.Post("/", s.createTask)
-			r.Route("/{taskID}", func(r chi.Router) {
-				r.Get("/", s.getTask)
-				r.Delete("/", s.deleteTask)
-				r.Post("/dependencies", s.addTaskDependency)
-			})
-		})
-
-		r.Route("/workers", func(r chi.Router) {
-			r.Get("/", s.listWorkers)
-		})
-	})
-
-	// Prometheus metrics endpoint
-	s.Router.Handle("/metrics", promhttp.Handler())
-
-	// Embedded static canvas client
-	fs := http.FileServer(http.FS(webCanvas))
-	s.Router.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-
-		ext := filepath.Ext(r.URL.Path)
-		if ext == "" {
-			r.URL.Path = "/dist/index.html"
-		} else {
-			r.URL.Path = "/dist" + r.URL.Path
-		}
-
-		fs.ServeHTTP(w, r)
-	}))
-}
-
-// Helpers for responses
-func sendSuccess(w http.ResponseWriter, r *http.Request, data interface{}, status int) {
-	render.Status(r, status)
-	render.JSON(w, r, APIResponse{
-		Success:   true,
-		Data:      data,
-		Timestamp: time.Now(),
-		RequestID: middleware.GetReqID(r.Context()),
-	})
-}
-
-func sendError(w http.ResponseWriter, r *http.Request, err error, status int) {
-	render.Status(r, status)
-	render.JSON(w, r, APIResponse{
-		Success:   false,
-		Error:     err.Error(),
-		Timestamp: time.Now(),
-		RequestID: middleware.GetReqID(r.Context()),
-	})
-}
-
-// Handlers
-func (s *APIServer) healthCheck(w http.ResponseWriter, r *http.Request) {
-	stats := s.scheduler.GetStats()
-	sendSuccess(w, r, map[string]interface{}{
-		"status": "healthy",
-		"stats":  stats,
-	}, http.StatusOK)
-}
-
-// getMetrics returns observer metrics (replaces retired dashboard /api/metrics).
-func (s *APIServer) getMetrics(w http.ResponseWriter, r *http.Request) {
-	if s.observer == nil {
-		sendError(w, r, fmt.Errorf("observer not available"), http.StatusServiceUnavailable)
-		return
+	if exec != nil {
+		deps.Workers = exec
 	}
-	metrics := s.observer.GetMetrics()
-	sendSuccess(w, r, metrics, http.StatusOK)
+	if bus != nil {
+		deps.Events = bus
+	}
+	if wfe != nil {
+		deps.Workflows = wfe
+	}
+	if obs != nil {
+		deps.Observer = obs
+	}
+	return NewAPIServerWithDependencies(deps, opts...)
 }
 
-// getLogs returns observer logs (replaces retired dashboard /api/logs).
-func (s *APIServer) getLogs(w http.ResponseWriter, r *http.Request) {
-	if s.observer == nil {
-		sendError(w, r, fmt.Errorf("observer not available"), http.StatusServiceUnavailable)
-		return
-	}
-	logs := s.observer.GetLogs()
-	sendSuccess(w, r, logs, http.StatusOK)
-}
-
-type CreateTaskRequest struct {
-	Type        string                 `json:"type"`
-	Config      map[string]interface{} `json:"config"`
-	Input       []byte                 `json:"input"`
-	IsAgent     bool                   `json:"is_agent"`
-	AgentConfig *scheduler.AgentConfig `json:"agent_config"`
-}
-
-func (req *CreateTaskRequest) Bind(r *http.Request) error {
-	if req.Type == "" {
-		return lwerrors.ErrTaskInvalid
-	}
-	if len(req.Type) > 255 {
-		return fmt.Errorf("task type too long (max 255 characters)")
-	}
-	if len(req.Input) > 10*1024*1024 { // 10MB limit
-		return fmt.Errorf("task input too large (max 10MB)")
-	}
-	return nil
-}
-
-func (s *APIServer) listTasks(w http.ResponseWriter, r *http.Request) {
-	// Parse pagination parameters
-	limit := 50 // default
-	offset := 0
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if parsed, err := fmt.Sscanf(l, "%d", &limit); err == nil && parsed == 1 {
-			if limit < 1 {
-				limit = 1
-			}
-			if limit > 1000 {
-				limit = 1000
-			}
-		}
-	}
-	if o := r.URL.Query().Get("offset"); o != "" {
-		if parsed, err := fmt.Sscanf(o, "%d", &offset); err == nil && parsed == 1 {
-			if offset < 0 {
-				offset = 0
-			}
+// NewAPIServerWithDependencies builds the HTTP surface over explicit ports.
+func NewAPIServerWithDependencies(deps Dependencies, opts ...Option) *APIServer {
+	cfg := newConfig(opts...)
+	if deps.Lister == nil {
+		if lister, ok := deps.Tasks.(TaskLister); ok {
+			deps.Lister = lister
 		}
 	}
 
-	// Parse filter parameters
-	filter := scheduler.TaskFilter{}
-	if state := r.URL.Query().Get("state"); state != "" {
-		filter.States = []scheduler.TaskState{scheduler.TaskState(state)}
-	}
-	if taskType := r.URL.Query().Get("type"); taskType != "" {
-		filter.Types = []string{taskType}
+	server := &APIServer{
+		cfg:     cfg,
+		deps:    deps,
+		lister:  deps.Lister,
+		limits:  security.NewTieredRateLimiter(cfg.AnonRate, cfg.AnonWindow, cfg.Authenticated, cfg.AuthWindow),
+		streams: security.NewConcurrencyLimiter(cfg.MaxStreamsPerCaller, cfg.MaxStreamsTotal),
+		version: versionString(),
 	}
 
-	tasks := s.scheduler.ListTasks(filter)
-
-	// Apply pagination
-	total := len(tasks)
-	if offset >= total {
-		tasks = []*scheduler.Task{}
+	if auth, err := security.NewAuthenticator(cfg.Auth); err != nil {
+		server.configError = err
 	} else {
-		end := offset + limit
-		if end > total {
-			end = total
-		}
-		tasks = tasks[offset:end]
+		auth.SetFailureWriter(failureWriter)
+		server.auth = auth
+		logBootstrapCredential(auth)
 	}
 
-	// Return with pagination metadata
-	sendSuccess(w, r, map[string]interface{}{
-		"tasks":  tasks,
-		"total":  total,
-		"limit":  limit,
-		"offset": offset,
-	}, http.StatusOK)
+	server.Router = chi.NewRouter()
+	server.registerRoutes()
+	return server
 }
 
-func (s *APIServer) createTask(w http.ResponseWriter, r *http.Request) {
-	data := &CreateTaskRequest{}
-	if err := render.Bind(r, data); err != nil {
-		sendError(w, r, err, http.StatusBadRequest)
-		return
-	}
+// ConfigError reports why the server refused to accept credentials, if any.
+func (s *APIServer) ConfigError() error { return s.configError }
 
-	task, err := s.scheduler.CreateTask(r.Context(), data.Type, data.Config, data.Input)
-	if err != nil {
-		sendError(w, r, err, http.StatusInternalServerError)
-		return
-	}
+// Authenticator exposes the wired authenticator for the admin listener.
+func (s *APIServer) Authenticator() *security.Authenticator { return s.auth }
 
-	if data.IsAgent {
-		task.IsAgent = true
-		task.AgentConfig = data.AgentConfig
-		s.scheduler.SaveTask(task)
-	}
-
-	if err := s.scheduler.QueueTask(r.Context(), task.ID); err != nil {
-		sendError(w, r, err, http.StatusInternalServerError)
-		return
-	}
-
-	sendSuccess(w, r, task, http.StatusCreated)
-}
-
-func (s *APIServer) getTask(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "taskID")
-	task, exists := s.scheduler.GetTask(id)
-	if !exists {
-		sendError(w, r, lwerrors.ErrTaskNotFound, http.StatusNotFound)
-		return
-	}
-	sendSuccess(w, r, task, http.StatusOK)
-}
-
-func (s *APIServer) deleteTask(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "taskID")
-	if err := s.scheduler.CancelTask(r.Context(), id); err != nil {
-		sendError(w, r, err, http.StatusInternalServerError)
-		return
-	}
-	sendSuccess(w, r, map[string]string{"id": id, "status": "cancelled"}, http.StatusOK)
-}
-
-func (s *APIServer) listWorkers(w http.ResponseWriter, r *http.Request) {
-	workers := s.executor.ListWorkers()
-	sendSuccess(w, r, workers, http.StatusOK)
-}
-
-func (s *APIServer) getWorkflowGraph(w http.ResponseWriter, r *http.Request) {
-	tasks := s.scheduler.ListTasks(scheduler.TaskFilter{})
-
-	taskMap := make(map[string]*scheduler.Task)
-	for _, t := range tasks {
-		taskMap[t.ID] = t
-	}
-
-	depths := make(map[string]int)
-	var getDepth func(id string) int
-	getDepth = func(id string) int {
-		if d, exists := depths[id]; exists {
-			return d
-		}
-		t, exists := taskMap[id]
-		if !exists || len(t.Dependencies) == 0 {
-			depths[id] = 0
-			return 0
-		}
-		maxDep := 0
-		for _, dep := range t.Dependencies {
-			depDepth := getDepth(dep)
-			if depDepth > maxDep {
-				maxDep = depDepth
-			}
-		}
-		depths[id] = maxDep + 1
-		return maxDep + 1
-	}
-
-	for _, t := range tasks {
-		getDepth(t.ID)
-	}
-
-	depthGroups := make(map[int][]string)
-	maxDepth := 0
-	for id, d := range depths {
-		depthGroups[d] = append(depthGroups[d], id)
-		if d > maxDepth {
-			maxDepth = d
-		}
-	}
-
-	type Position struct {
-		X float64 `json:"x"`
-		Y float64 `json:"y"`
-	}
-	type Node struct {
-		ID       string                 `json:"id"`
-		Type     string                 `json:"type"`
-		Position Position               `json:"position"`
-		Data     map[string]interface{} `json:"data"`
-	}
-	type Edge struct {
-		ID       string `json:"id"`
-		Source   string `json:"source"`
-		Target   string `json:"target"`
-		Animated bool   `json:"animated"`
-	}
-
-	var nodes []Node
-	var edges []Edge
-
-	for d := 0; d <= maxDepth; d++ {
-		ids := depthGroups[d]
-		colX := float64(100 + d*300)
-		numInCol := len(ids)
-
-		for idx, id := range ids {
-			t := taskMap[id]
-			rowY := float64(100 + idx*180)
-			if numInCol > 1 {
-				rowY = float64(100 + idx*(500/numInCol))
-			}
-
-			nodeType := "wasmNode"
-			if t.IsAgent {
-				nodeType = "agentNode"
-			}
-
-			nodes = append(nodes, Node{
-				ID:       t.ID,
-				Type:     nodeType,
-				Position: Position{X: colX, Y: rowY},
-				Data: map[string]interface{}{
-					"label": t.Type,
-					"task":  t,
-				},
-			})
-
-			for _, depID := range t.Dependencies {
-				edges = append(edges, Edge{
-					ID:       fmt.Sprintf("e-%s-%s", depID, t.ID),
-					Source:   depID,
-					Target:   t.ID,
-					Animated: t.State == scheduler.StateRunning || t.State == scheduler.StateQueued,
-				})
-			}
-		}
-	}
-
-	sendSuccess(w, r, map[string]interface{}{
-		"nodes": nodes,
-		"edges": edges,
-	}, http.StatusOK)
-}
-
-func (s *APIServer) streamEventsLive(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
-	types := []event.EventType{
-		event.EventTaskCreated,
-		event.EventTaskStarted,
-		event.EventTaskCompleted,
-		event.EventTaskFailed,
-		event.EventTaskRetried,
-		event.EventTaskCancelled,
-		event.EventPluginExecuted,
-		event.EventSkillInvoked,
-		event.EventResearchFinding,
-		event.EventWorkflowStepCompleted,
-		event.EventWorkflowStarted,
-		event.EventWorkflowCompleted,
-		event.EventWorkflowFailed,
-	}
-
-	var subs []*event.Subscriber
-	for _, t := range types {
-		subs = append(subs, s.eventBus.Subscribe(t, 100))
-	}
-
-	defer func() {
-		for _, sub := range subs {
-			s.eventBus.Unsubscribe(sub)
-		}
-	}()
-
-	mergedCh := make(chan event.Event, 500)
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-
-	for _, sub := range subs {
-		go func(ch <-chan event.Event) {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case evt, ok := <-ch:
-					if !ok {
-						return
-					}
-					select {
-					case mergedCh <- evt:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}(sub.Chan())
-	}
-
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-ticker.C:
-			fmt.Fprintf(w, ": keep-alive\n\n")
-			flusher.Flush()
-		case evt := <-mergedCh:
-			payloadJSON, _ := json.Marshal(evt.Payload())
-
-			var taskData []byte
-			if payloadMap, ok := evt.Payload().(map[string]interface{}); ok {
-				if taskID, ok := payloadMap["task_id"].(string); ok {
-					if t, exists := s.scheduler.GetTask(taskID); exists {
-						var marshalErr error
-						taskData, marshalErr = json.Marshal(t)
-						if marshalErr != nil {
-							// 记录错误但不阻塞响应
-							logger.Warn("failed to marshal task", zap.Error(marshalErr))
-						}
-					}
-				}
-			}
-			if len(taskData) == 0 {
-				taskData = payloadJSON
-			}
-
-			fmt.Fprintf(w, "event: %s\n", string(evt.Type()))
-			fmt.Fprintf(w, "data: %s\n\n", string(taskData))
-			flusher.Flush()
-		}
-	}
-}
-
-func (s *APIServer) addTaskDependency(w http.ResponseWriter, r *http.Request) {
-	taskID := chi.URLParam(r, "taskID")
-
-	type DepReq struct {
-		DependencyID string `json:"dependency_id"`
-	}
-	var data DepReq
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		sendError(w, r, err, http.StatusBadRequest)
-		return
-	}
-
-	if err := s.scheduler.AddDependency(r.Context(), taskID, data.DependencyID); err != nil {
-		sendError(w, r, err, http.StatusInternalServerError)
-		return
-	}
-
-	sendSuccess(w, r, map[string]string{"status": "dependency_added"}, http.StatusOK)
-}
-
-// listWorkflows returns all registered workflows from the WorkflowEngine.
-func (s *APIServer) listWorkflows(w http.ResponseWriter, r *http.Request) {
-	if s.wfe == nil {
-		sendError(w, r, fmt.Errorf("workflow engine not available"), http.StatusServiceUnavailable)
-		return
-	}
-
-	workflows := s.wfe.ListWorkflows()
-	result := make([]map[string]interface{}, len(workflows))
-	for i, wf := range workflows {
-		result[i] = map[string]interface{}{
-			"id":     wf.ID,
-			"name":   wf.Name,
-			"status": wf.GetStatus(),
-		}
-	}
-	sendSuccess(w, r, map[string]interface{}{"workflows": result}, http.StatusOK)
-}
-
-// executeWorkflow triggers execution of a workflow by ID.
-func (s *APIServer) executeWorkflow(w http.ResponseWriter, r *http.Request) {
-	type ExecuteReq struct {
-		WorkflowID string `json:"workflow_id"`
-	}
-
-	var data ExecuteReq
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		sendError(w, r, err, http.StatusBadRequest)
-		return
-	}
-
-	if data.WorkflowID == "" {
-		sendError(w, r, fmt.Errorf("workflow_id is required"), http.StatusBadRequest)
-		return
-	}
-
-	// Execute workflow in background (in-memory, synchronous engine)
-	utils.GoSafe(r.Context(), func(ctx context.Context) {
-		if s.wfe == nil {
-			return
-		}
-		if err := s.wfe.Execute(ctx, data.WorkflowID); err != nil {
-			sendError(w, r, err, http.StatusInternalServerError)
-			return
+// Close stops background goroutines (limiter cleanup).
+func (s *APIServer) Close() {
+	s.closeOnce.Do(func() {
+		if s.limits != nil {
+			s.limits.Stop()
 		}
 	})
-
-	sendSuccess(w, r, map[string]interface{}{
-		"workflow_id": data.WorkflowID,
-		"status":      "executing",
-		"message":     "workflow execution started",
-	}, http.StatusAccepted)
 }
+
+// blockConfigError answers every request when credentials are unusable.
+func (s *APIServer) blockConfigError() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if s.configError == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			writeJSON(w, r, http.StatusServiceUnavailable, Envelope{Success: false, Error: &ErrorBody{
+				Code: CodeServiceUnavailable,
+				Message: "The server started with an unusable authentication configuration, so every endpoint is closed. Fix: " +
+					s.configError.Error(),
+			}})
+		})
+	}
+}
+
+// registerRoutes installs middleware and the versioned API surface.
+func (s *APIServer) registerRoutes() {
+	bundle := &middlewareBundle{auth: s.auth, limits: s.limits, cfg: s.cfg, streams: s.streams}
+
+	// Public listener: no prometheus registry, no runtime stats.
+	s.Router.Use(securityHeaders)
+	s.Router.Use(bundle.cors)
+	s.Router.Use(bundle.requestID)
+	s.Router.Use(bundle.accessLog)
+	s.Router.Use(s.blockConfigError())
+	s.Router.Use(middleware_Recoverer())
+	s.Router.Use(bundle.bodyLimit)
+	s.Router.Use(bundle.timeout)
+	s.Router.NotFound(s.notFoundHandler())
+	s.Router.MethodNotAllowed(s.methodNotAllowedHandler())
+
+	// Unauthenticated routes are limited per client IP; authenticated routes are
+	// limited per credential inside the group below. Splitting the two is what
+	// stops a NAT'd office from sharing one anonymous budget while every API key
+	// is also billed for anonymous traffic.
+	public := s.Router.With(bundle.rateLimitIP)
+	public.Get("/healthz", s.livenessProbe)
+
+	s.Router.Route("/api/v1", func(r chi.Router) {
+		r.With(bundle.rateLimitIP).Get("/health", s.healthCheck)
+		r.With(bundle.rateLimitIP).Get("/openapi.json", s.getOpenAPISpec)
+
+		// Every endpoint below requires a credential; role checks happen per
+		// route so a viewer cannot mutate state and an operator cannot manage
+		// keys.
+		r.With(bundle.authMiddleware, bundle.principalLimit).Group(func(authed chi.Router) {
+			authed.Get("/auth/whoami", s.whoami)
+			authed.Get("/workers", s.listWorkers)
+			authed.Get("/tasks", s.listTasks)
+			authed.Get("/tasks/{taskID}", s.getTask)
+			authed.Get("/workflow/graph", s.getWorkflowGraph)
+			authed.Get("/workflow/list", s.listWorkflows)
+			authed.Get("/workflow/{workflowID}", s.getWorkflow)
+			authed.Get("/events/live", s.streamEventsLive)
+
+			authed.With(bundle.require(security.PermWrite)).Post("/tasks", s.createTask)
+			authed.With(bundle.require(security.PermWrite)).Delete("/tasks/{taskID}", s.deleteTask)
+			authed.With(bundle.require(security.PermWrite)).Post("/tasks/{taskID}/cancel", s.cancelTask)
+			authed.With(bundle.require(security.PermWrite)).Post("/tasks/{taskID}/dependencies", s.addTaskDependency)
+			authed.With(bundle.require(security.PermExecute)).Post("/workflow/execute", s.executeWorkflow)
+
+			authed.With(bundle.require(security.PermAdmin)).Post("/auth/token", s.createToken)
+			authed.With(bundle.require(security.PermAdmin)).Post("/auth/keys", s.createAPIKey)
+			authed.With(bundle.require(security.PermAdmin)).Get("/auth/keys", s.listAPIKeys)
+			authed.With(bundle.require(security.PermAdmin)).Delete("/auth/keys/{keyID}", s.revokeAPIKey)
+		})
+	})
+
+	if s.cfg.ServeStatic {
+		s.Router.With(bundle.rateLimitIP).Handle("/*", s.staticHandler())
+	}
+}
+
+// livenessProbe is an unauthenticated, payload-free readiness signal for
+// orchestrators; it never reports workload statistics.
+func (s *APIServer) livenessProbe(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	status := http.StatusOK
+	body := map[string]any{"status": "alive", "readiness": s.readies()}
+	if s.configError != nil {
+		status = http.StatusServiceUnavailable
+		body["status"] = "unavailable"
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(jsonBytes(body))
+}
+
+func (s *APIServer) notFoundHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, r, http.StatusNotFound, Envelope{Success: false, Error: &ErrorBody{
+			Code:    CodeNotFound,
+			Message: "No route matches " + r.Method + " " + cleanPath(r.URL.Path) + ". Fix: GET /api/v1/openapi.json lists every endpoint this build ships.",
+		}})
+	}
+}
+
+func (s *APIServer) methodNotAllowedHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, r, http.StatusMethodNotAllowed, Envelope{Success: false, Error: &ErrorBody{
+			Code:    CodeMethodNotAllowed,
+			Message: r.Method + " is not allowed on " + cleanPath(r.URL.Path) + ". Fix: check the allowed verbs in GET /api/v1/openapi.json.",
+		}})
+	}
+}
+
+func cleanPath(path string) string {
+	if len(path) > 200 {
+		return path[:200] + "..."
+	}
+	return path
+}
+
+// canvasIndex is the SPA shell served for extensionless paths.
+//
+// It is read once at init rather than through http.FileServer because net/http's
+// serveFile 301-redirects any path ending in /index.html to "./". For the request
+// a browser sends first - GET / - that redirect resolves to / again, so the
+// landing page spun forever. Serving the bytes directly is both the fix and the
+// cheaper path; the shell is a compile-time constant, not a file we might change.
+var canvasIndex = func() []byte {
+	b, err := fs.ReadFile(webCanvas, "dist/index.html")
+	if err != nil {
+		// Cannot happen: dist/index.html is covered by the embed directive above,
+		// and a build without it is a build that should not have succeeded.
+		panic("loopworker: embedded canvas is missing dist/index.html: " + err.Error())
+	}
+	return b
+}()
+
+// staticHandler serves the embedded canvas without exposing API internals.
+func (s *APIServer) staticHandler() http.HandlerFunc {
+	fileServer := http.FileServer(http.FS(webCanvas))
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/metrics") {
+			s.notFoundHandler()(w, r)
+			return
+		}
+		if filepath.Ext(r.URL.Path) == "" {
+			// Every extensionless path is the SPA's job to route, so the shell is
+			// the correct answer for all of them - including "/".
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.WriteHeader(http.StatusOK)
+			w.Write(canvasIndex)
+			return
+		}
+		r.URL.Path = "/dist" + r.URL.Path
+		fileServer.ServeHTTP(w, r)
+	}
+}
+
+// getOpenAPISpec serves the embedded contract so a customer can codegen a client
+// without asking support anything.
+func (s *APIServer) getOpenAPISpec(w http.ResponseWriter, r *http.Request) {
+	sendRaw(w, http.StatusOK, "application/json; charset=utf-8", OpenAPISpecJSON)
+}
+
+// versionString reports the build version from the single source of truth.
+// This used to be a second `var serverVersion = "dev"` that release tooling was
+// supposed to fill in through SetVersion - and nothing ever called it, so a
+// freshly built binary advertised itself as "dev" while `loopworker version`
+// printed the real value. version.Version is already the ldflags target
+// (see Makefile / .release/build.ps1), so read it directly.
+func versionString() string { return version.Version }
+
+// NewHTTPServer returns an http.Server with slowloris-safe timeouts. Streaming
+// responses are exempt from the handler deadline, not from these socket
+// timeouts, so keep WriteTimeout generous or serve events from a second server.
+func NewHTTPServer(addr string, handler http.Handler, cfg Config) *http.Server {
+	read := cfg.ReadTimeout
+	if read <= 0 {
+		read = 15 * time.Second
+	}
+	write := cfg.WriteTimeout
+	if write <= 0 {
+		write = 75 * time.Second
+	}
+	idle := cfg.IdleTimeout
+	if idle <= 0 {
+		idle = 60 * time.Second
+	}
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       read,
+		WriteTimeout:      write,
+		IdleTimeout:       idle,
+		MaxHeaderBytes:    1 << 20,
+		ErrorLog:          stdlibErrorLog(),
+	}
+}
+
+var _ = context.Canceled
+var _ = errors.Is

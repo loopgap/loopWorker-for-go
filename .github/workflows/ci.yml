@@ -1,92 +1,321 @@
 name: CI
 
+# Every gate below is BLOCKING. Nothing here is `continue-on-error`.
+#
+# Toolchain versions are pinned explicitly. The Go version is never hardcoded:
+# it comes from go.mod via `go-version-file: go.mod`, and the `release-config`
+# job fails if any workflow, the Dockerfile, or .goreleaser.yaml disagrees with
+# go.mod (that drift — '1.21','1.22' vs `go 1.26.1` — is what made the old CI
+# green while the image could not build).
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOLANGCI_VERSION: v2.9.0
+  GORELEASER_VERSION: v2.9.0
+  GOVULNCHECK_VERSION: v1.8.0
+  ACTIONLINT_VERSION: v1.7.11
+  SYFT_VERSION: v1.9.0
+  COVERAGE_MIN: "80"
+  # Floor for each package that actually ships. Keep this list equal to the
+  # binaries in .goreleaser.yaml's build target: a package in cmd/ that is not
+  # listed here is a package nobody promised to test.
+  COVERAGE_PKG_MIN: "60"
+  SHIPPED_PKGS: "./cmd/loopworker,./cmd/loopctl"
 
 jobs:
+  # ---------------------------------------------------------------- lint/flow
+  workflow-lint:
+    name: Workflow & release-config lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      - name: actionlint (catches broken workflows before they run)
+        run: |
+          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
+          actionlint -color .github/workflows/*.yml
+      - name: YAML parse check (.goreleaser.yaml, .golangci.yaml)
+        run: |
+          python3 - <<'PY'
+          import sys, glob
+          try:
+              import yaml
+          except ImportError:
+              sys.exit(0)  # validated by goreleaser/actionlint below
+          for f in glob.glob('.goreleaser.yaml') + glob.glob('.golangci.yaml') + glob.glob('.github/workflows/*.yml'):
+              with open(f) as fh:
+                  yaml.safe_load(fh)
+              print('yaml ok:', f)
+          PY
+
+  release-config:
+    name: Release pipeline consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: relcheck (go.mod vs Dockerfile vs workflows vs ldflags vs embeds)
+        working-directory: .release/tools
+        run: go run ./relcheck -root ../..
+      # relcheck gates the release pipeline, so its own parser is tested: it once
+      # reported three false-positive ERRORs against a correct Dockerfile, which
+      # would have left this gate permanently red and therefore ignored.
+      - name: relcheck self-test
+        working-directory: .release/tools
+        run: go test ./... -count=1
+      - name: goreleaser check
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: ${{ env.GORELEASER_VERSION }}
+          args: check
+
+  dco:
+    name: DCO sign-off (every commit must be certified)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check Signed-off-by trailer
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          for sha in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            if ! git show -s --format=%B "$sha" | grep -qiE '^Signed-off-by:.+'; then
+              echo "::error::commit ${sha} ($(git show -s --format='%h %an' "$sha")) has no 'Signed-off-by:' trailer"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            cat <<'EOF'
+          Each commit must be signed off (Developer Certificate of Origin 1.1),
+          which is what keeps future relicensing of an enterprise layer clean.
+          Fix with:
+            git commit --amend --signoff      # for the last commit
+            git rebase --signoff "$BASE"     # for a whole branch
+            git -c log.showSignature=false push --force-with-lease
+          Or ask a maintainer to add the 'skip-dco' label (one-time, recorded).
+          EOF
+            exit 1
+          fi
+          echo "DCO: all commits carry Signed-off-by"
+      - if: failure()
+        run: echo "::warning::See CONTRIBUTING.md 'Developer Certificate of Origin'."
+
+  # --------------------------------------------------------------------- quality
+  quality:
+    name: Format, vet, lint, vulns (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt (blocking — unformatted code fails the build)
+        run: |
+          bad=$(gofmt -l . | grep -vE '^(tmp-audit|dist)/' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::these files are not gofmt-clean"
+            echo "$bad"
+            echo "Run: gofmt -w ."
+            exit 1
+          fi
+          echo "gofmt: clean"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint ${{ env.GOLANGCI_VERSION }}
+        run: |
+          go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_VERSION}"
+          "$(go env GOPATH)/bin/golangci-lint" run --timeout 10m ./...
+
+      - name: govulncheck ${{ env.GOVULNCHECK_VERSION }} (known CVEs in deps + stdlib)
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          "$(go env GOPATH)/bin/govulncheck" --show=verbose ./...
+
   test:
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }}, go from go.mod)
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        go-version: ['1.21', '1.22']
-
+        # OS matrix, not a Go-version matrix: go.mod pins one Go version and the
+        # product ships one toolchain. Old-Go-version matrices produced a green
+        # CI for a Go version nobody ships.
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: go build ./...
+      - name: Test
+        run: go test -count=1 ./...
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: ${{ matrix.go-version }}
-
-    - name: Build
-      run: go build ./...
-
-    - name: Test
-      run: go test -count=1 ./...
-
-    - name: Race Test
-      run: go test -race -count=1 ./internal/core/... ./pkg/event/... ./pkg/utils/... ./pkg/workflow/...
-
-    - name: Vet
-      run: go vet ./...
-
-    - name: Format Check
-      run: |
-        if [ -n "$(gofmt -l .)" ]; then
-          echo "The following files are not formatted:"
-          gofmt -l .
-          exit 1
-        fi
-
-  build:
+  race:
+    name: Race detector (ALL packages)
     runs-on: ubuntu-latest
-    needs: test
-
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go test -race ./...
+        # Previously this job covered only internal/core, pkg/event, pkg/utils,
+        # pkg/workflow — i.e. it excluded pkg/server, the package with a verified
+        # data race. Now it covers everything, so it cannot hide again.
+        run: go test -race -count=1 -timeout 20m ./...
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.22'
+  coverage:
+    name: Coverage gate (>= 80%)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test with cross-package coverage
+        run: |
+          go test -count=1 -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tail -1
+      - name: Enforce threshold (was previously a report with no assertion)
+        working-directory: .release/tools
+        run: go run ./covergate -file ../../coverage.out -min "${COVERAGE_MIN}"
+      - name: Enforce per-package floor for shipped binaries
+        # AGENT-COLLABORATION-SPEC.md AC-3 asks for a cmd-layer floor but nothing
+        # measured it, so it stayed red for weeks with every build green. The
+        # list is explicit on purpose: adding a binary to cmd/ without a floor
+        # here makes this step fail, which turns "is this shippable?" into a
+        # decision someone has to make rather than a number nobody reads.
+        # Packages that do not ship (loopbench, loopsim, loopdebug, loopwatch)
+        # are deliberately absent - see .release/SCOPE-PROPOSAL.md.
+        working-directory: .release/tools
+        run: go run ./covergate -pkg "${{ env.SHIPPED_PKGS }}" -pkg-min "${COVERAGE_PKG_MIN}" -file ../../coverage.out
+      - name: Coverage HTML artifact (informational)
+        if: always()
+        run: go tool cover -html=coverage.out -o coverage.html
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.out
+            coverage.html
 
-    - name: Build Linux
-      run: |
-        for cmd in loopworker loopctl loopdebug loopwatch loopbench loopsim; do
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o bin/${cmd}-linux-amd64 ./cmd/${cmd}/
-        done
+  # ----------------------------------------------------------------------- smoke
+  boot-smoke:
+    name: Boot smoke test (Linux binary)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build static binary (CGO_ENABLED=0)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o bin/loopworker ./cmd/loopworker/
+          file bin/loopworker
+      - name: Boot, then require health, auth and a task that really completes
+        run: bash .release/scripts/boot-smoke.sh bin/loopworker
 
-    - name: Build Windows
-      run: |
-        for cmd in loopworker loopctl loopdebug loopwatch loopbench loopsim; do
-          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build -o bin/${cmd}-windows-amd64.exe ./cmd/${cmd}/
-        done
+  boot-smoke-windows:
+    name: Boot smoke test (Windows .exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # The bug this job kills: `make build` on Windows wrote bin/loopworker with
+      # no .exe, i.e. an artifact a Windows customer cannot run at all.
+      - name: Build via .release/build.ps1 (produces bin\loopworker.exe)
+        shell: pwsh
+        run: ./.release/build.ps1 -Task build
+      - name: Assert the artifact really is an .exe
+        shell: pwsh
+        run: |
+          Get-ChildItem bin\loopworker.exe | Select-Object Name, Length
+          if (-not (Test-Path bin\loopworker.exe)) { throw "bin\loopworker.exe missing" }
+          if (Test-Path bin\loopworker) { throw "suffix-less bin\loopworker exists on Windows" }
+      - name: Boot + health + graceful shutdown (Ctrl+Break => SIGTERM path)
+        shell: pwsh
+        run: ./.release/build.ps1 -Task smoke
 
-    - name: Build macOS
-      run: |
-        for cmd in loopworker loopctl loopdebug loopwatch loopbench loopsim; do
-          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -o bin/${cmd}-darwin-amd64 ./cmd/${cmd}/
-        done
-
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: binaries
-        path: bin/
-
+  # ---------------------------------------------------------------------- docker
   docker:
+    name: Docker build + boot/SIGTERM smoke
     runs-on: ubuntu-latest
-    needs: test
-
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - name: Derive GO_VERSION from go.mod (no drifting pins)
+        id: gov
+        run: |
+          v=$(grep -E '^go [0-9]' go.mod | awk '{print $2}')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "go.mod Go version => $v"
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: loopworker:smoke
+          build-args: |
+            GO_VERSION=${{ steps.gov.outputs.version }}
+            VERSION=ci-${{ github.sha }}
+            GIT_COMMIT=${{ github.sha }}
+      - name: Boot container, hit /api/v1/health, prove graceful SIGTERM
+        run: bash .release/scripts/docker-smoke.sh loopworker:smoke 19527
+      - name: Trivy image scan (fail on CRITICAL)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.75.0
+          trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --no-progress loopworker:smoke
 
-    - name: Build Docker Image
-      run: docker build -t loopworker:${{ github.sha }} .
-
-    - name: Test Docker Image
-      run: |
-        docker run --rm loopworker:${{ github.sha }} version
+  # ------------------------------------------------------ attribution artifacts
+  third-party-notices:
+    name: Third-party license text (go-licenses)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Generate notices for statically linked dependencies
+        run: |
+          go install github.com/google/go-licenses/v2@v2.0.1
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go-licenses save ./... --save_path=THIRD-PARTY-LICENSES --force
+          go-licenses report ./... > THIRD-PARTY-NOTICES.csv
+          test -d THIRD-PARTY-LICENSES
+          echo "### generated file count: $(find THIRD-PARTY-LICENSES -type f | wc -l)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: third-party-notices
+          path: |
+            THIRD-PARTY-LICENSES/
+            THIRD-PARTY-NOTICES.csv

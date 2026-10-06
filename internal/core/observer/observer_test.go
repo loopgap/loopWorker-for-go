@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"loopworker/pkg/event"
 )
 
@@ -439,4 +441,177 @@ func TestConcurrentMixedOperations(t *testing.T) {
 	if len(traces) != n {
 		t.Errorf("expected %d traces, got %d", n, len(traces))
 	}
+}
+
+// ---- Strict coverage: cover all remaining branches ----
+
+// TestMinInt 验证 minInt 辅助函数。
+func TestMinInt(t *testing.T) {
+	if minInt(3, 5) != 3 {
+		t.Error("expected 3")
+	}
+	if minInt(5, 3) != 3 {
+		t.Error("expected 3")
+	}
+	if minInt(0, 0) != 0 {
+		t.Error("expected 0")
+	}
+	if minInt(-1, 1) != -1 {
+		t.Error("expected -1")
+	}
+}
+
+// TestLogAllLevels 验证所有日志级别的处理。
+func TestLogAllLevels(t *testing.T) {
+	o := NewObserver(nil)
+
+	for _, level := range []string{"debug", "info", "warn", "error", "unknown"} {
+		o.Log(level, "msg-"+level, map[string]interface{}{"level": level})
+	}
+
+	logs := o.GetLogs()
+	if len(logs) != 5 {
+		t.Errorf("expected 5 logs, got %d", len(logs))
+	}
+}
+
+// TestHandleEventTaskCompletedWithResult 验证 TaskCompleted 事件带 result。
+func TestHandleEventTaskCompletedWithResult(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	o := NewObserver(bus)
+	o.Start(context.Background())
+
+	bus.Publish(context.Background(), event.NewEvent(event.EventTaskCompleted, event.TaskCompletedPayload{
+		TaskID: "t1", Duration: 100 * time.Millisecond, Result: "some result data",
+	}, nil))
+
+	time.Sleep(50 * time.Millisecond)
+	if len(o.GetMetrics()) == 0 {
+		t.Error("expected metrics after completed event")
+	}
+}
+
+// TestHandleEventTaskCompletedWithoutResult 验证 TaskCompleted 无 result 路径。
+func TestHandleEventTaskCompletedWithoutResult(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	o := NewObserver(bus)
+	o.Start(context.Background())
+
+	bus.Publish(context.Background(), event.NewEvent(event.EventTaskCompleted, event.TaskCompletedPayload{
+		TaskID: "t1", Duration: 50 * time.Millisecond,
+	}, nil))
+
+	time.Sleep(50 * time.Millisecond)
+}
+
+// TestHandleEventResearchFinding 验证 research.finding 事件。
+func TestHandleEventResearchFinding(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	o := NewObserver(bus)
+	o.Start(context.Background())
+
+	bus.Publish(context.Background(), event.NewEvent(event.EventResearchFinding, event.ResearchFindingPayload{
+		FindingID: "f1", Type: "anomaly", TaskID: "t1",
+	}, nil))
+
+	time.Sleep(50 * time.Millisecond)
+
+	found := false
+	for _, m := range o.GetMetrics() {
+		if m.Name == "research.findings" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected research.findings metric")
+	}
+}
+
+// TestHandleEventSystemHealth 验证 system.health gauge 事件。
+func TestHandleEventSystemHealth(t *testing.T) {
+	bus := event.NewEventBus(nil)
+	defer bus.Close()
+	o := NewObserver(bus)
+	o.Start(context.Background())
+
+	bus.Publish(context.Background(), event.NewEvent(event.EventSystemHealth, event.SystemHealthPayload{
+		CPU: 45.5, Memory: 72.3, Workers: 4, Tasks: 10,
+	}, nil))
+
+	time.Sleep(50 * time.Millisecond)
+
+	found := false
+	for _, m := range o.GetMetrics() {
+		if m.Name == "system.cpu" && m.Value == 45.5 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected system.cpu metric with value 45.5")
+	}
+}
+
+// TestTraceEviction 验证 trace 超过上限时淘汰最旧的。
+func TestTraceEviction(t *testing.T) {
+	restore := quietObserverLogger(t)
+	defer restore()
+
+	o := NewObserver(nil)
+	for i := 0; i < maxTraces+10; i++ {
+		o.StartTrace(fmt.Sprintf("op-%d", i))
+	}
+	traces := o.GetTraces()
+	if len(traces) > maxTraces {
+		t.Errorf("expected at most %d traces, got %d", maxTraces, len(traces))
+	}
+}
+
+// TestLogEviction 验证 log 超过上限时淘汰最旧的。
+// The sink is redirected to io.Discard: o.Log also writes through to zap, and at
+// this volume the console output buries every other package's test results.
+func TestLogEviction(t *testing.T) {
+	restore := quietObserverLogger(t)
+
+	o := NewObserver(nil)
+	for i := 0; i < maxLogs+10; i++ {
+		o.Log("info", fmt.Sprintf("msg-%d", i), nil)
+	}
+	logs := o.GetLogs()
+	if len(logs) > maxLogs {
+		t.Errorf("expected at most %d logs, got %d", maxLogs, len(logs))
+	}
+
+	// The newest entry must survive eviction, so the ring keeps the tail.
+	if logs[len(logs)-1].Message != fmt.Sprintf("msg-%d", maxLogs+9) {
+		t.Errorf("last retained message = %q, want the newest entry", logs[len(logs)-1].Message)
+	}
+	restore()
+}
+
+// TestTraceEvictionStaysBounded is the same guard for traces.
+func TestTraceEvictionStaysBounded(t *testing.T) {
+	restore := quietObserverLogger(t)
+	defer restore()
+
+	o := NewObserver(nil)
+	for i := 0; i < maxTraces+10; i++ {
+		span := o.StartTrace(fmt.Sprintf("op-%d", i))
+		o.EndTrace(span, "ok")
+	}
+	if got := len(o.GetTraces()); got > maxTraces {
+		t.Errorf("expected at most %d traces, got %d", maxTraces, got)
+	}
+}
+
+// quietObserverLogger points GlobalLogger at a discarding logger for the duration
+// of a test and restores it afterwards. Tests that deliberately push thousands of
+// entries through the log path must not spray that volume into the test output.
+func quietObserverLogger(t *testing.T) func() {
+	t.Helper()
+	previous := GlobalLogger
+	GlobalLogger = zap.NewNop()
+	return func() { GlobalLogger = previous }
 }

@@ -1,0 +1,267 @@
+# LoopWorker release pipeline (goreleaser v2.x — pinned to v2.9.0 in CI).
+#
+# Verified locally with:
+#   goreleaser check --config .goreleaser.yaml
+#   goreleaser release --snapshot --clean --skip=publish,sbom,sign
+#
+# What this produces per release tag (vX.Y.Z):
+#   loopworker-<ver>-<os>-<arch>.tar.gz  (linux/darwin, includes .exe suffix on windows via zip)
+#   loopworker-<ver>-windows-amd64.zip   (correct .exe inside — see format_overrides)
+#   loopworker-<ver>.deb / .rpm          (Linux package managers)
+#   checksums.txt                        (sha256, one line per artifact)
+#   *.spdx.json                          (SBOM via syft)
+#   *.sig / *.crt                        (cosign signatures, see .release/SIGNING.md)
+#
+# ---------------------------------------------------------------------------
+# OWNER ACTIONS REQUIRED BEFORE THE FIRST PUBLIC RELEASE (the pipeline will
+# fail fast rather than publish a half-configured release — see release.yml
+# job "Preflight"):
+#   1. Replace every remaining owner placeholder below with confirmed values.
+#      Only the legal-entity fields (nfpms vendor + maintainer) still need one.
+#   2. Create the Homebrew tap repo `homebrew-tap` under that owner.
+#   3. Confirm the Go module path (see .release/MODULE-PATH.md).
+# ---------------------------------------------------------------------------
+
+version: 2
+dist: dist
+
+project_name: loopworker
+
+# Preflight before any artifact is produced.
+# `go mod verify` fails the release if a dependency in the module cache was
+# tampered with. Config/path consistency checks live in .release/scripts/ and
+# are run by CI (not as a hook here) so that local `goreleaser release` works
+# on Windows too, where .sh shebangs are not executable.
+before:
+  hooks:
+    - go mod verify
+
+release:
+  name_template: "LoopWorker {{ .Tag }}"
+  header: |
+    ## LoopWorker {{ .Tag }} ({{ .Date }})
+
+    Self-service downloads below. Each archive contains one statically linked,
+    CGO-free binary for a single OS/architecture — no runtime dependencies.
+
+    | File | Platform |
+    |------|----------|
+    | `loopworker-{{ .Tag }}-linux-amd64.tar.gz` | Linux x86-64 |
+    | `loopworker-{{ .Tag }}-linux-arm64.tar.gz` | Linux arm64 |
+    | `loopworker-{{ .Tag }}-darwin-amd64.tar.gz` | macOS Intel |
+    | `loopworker-{{ .Tag }}-darwin-arm64.tar.gz` | macOS Apple silicon |
+    | `loopworker-{{ .Tag }}-windows-amd64.zip` | Windows 10/11 x86-64 (`loopworker.exe`) |
+
+    Verify before running: `shasum -a 256 -c checksums.txt`
+    Container image: `ghcr.io/loopgap/loopworker/loopworker:{{ .Tag }}` (see SUPPORT.md)
+  footer: |
+    ## Support
+
+    This product is self-service. See [SUPPORT.md](https://github.com/loopgap/loopworker/blob/main/SUPPORT.md)
+    for the exact scope of what we do and do not help with, [SECURITY.md](https://github.com/loopgap/loopworker/blob/main/SECURITY.md)
+    for vulnerability reporting, and the shipped `docs/` inside each archive.
+
+    ## SBOM & signatures
+
+    Every artifact has a `.spdx.json` SBOM and a cosign signature. Verify with:
+
+    ```bash
+    cosign verify-blob \
+      --signature checksums.txt.sig \
+      --certificate checksums.txt.pem \
+      --certificate-identity-regexp 'https://github.com/loopgap/loopworker/.+' \
+      --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+      checksums.txt
+    ```
+  prerelease: auto
+  draft: false
+  # GitHub is the only release target; nothing is mirrored elsewhere.
+  mode: replace
+
+# ---------------------------------------------------------------------------
+# Builds: one binary, five targets, CGO disabled so the artifacts are fully
+# static and runnable on any matching host without a toolchain.
+# NOTE: this only holds once the pure-Go sqlite driver
+# (modernc.org/sqlite) replaces gorm.io/driver/sqlite (mattn/go-sqlite3).
+# CI enforces that: the `release` workflow builds with CGO_ENABLED=0 and then
+# runs `go version -m` + `ldd`-free verification on the linux artifact.
+# ---------------------------------------------------------------------------
+builds:
+  - id: loopworker
+    binary: loopworker
+    # Import prefix MUST match `module loopworker` in go.mod.
+    # Enforced by .release/scripts/check-release-config.sh (also wired into CI).
+    main: ./cmd/loopworker
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X loopworker/version.Version={{ .Version }}
+      - -X loopworker/version.GitCommit={{ .FullCommit }}
+      - -X loopworker/version.BuildDate={{ .Date }}
+    # Explicit target list: linux amd64+arm64, darwin amd64+arm64, windows amd64.
+    # windows/arm64 and darwin/arm are intentionally NOT shipped (no demand
+    # evidence, each extra target is another support surface).
+    targets:
+      - linux_amd64
+      - linux_arm64
+      - darwin_amd64
+      - darwin_arm64
+      - windows_amd64
+    # Reproducible-ish builds: fixed module timestamp per release.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# ---------------------------------------------------------------------------
+# Archives: exactly one artifact per platform. LICENSE/NOTICE/docs ship inside
+# the archive so attribution obligations are met even when a customer only
+# keeps the tarball. web/canvas is deliberately NOT included (see
+# .release/SCOPE-PROPOSAL.md).
+# ---------------------------------------------------------------------------
+archives:
+  - id: loopworker
+    name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    ids:
+      - loopworker
+    formats:
+      - tar.gz
+    format_overrides:
+      # Windows users must get a .zip containing loopworker.exe, not a tar.gz.
+      - goos: windows
+        formats:
+          - zip
+    wrap_in_directory: true
+    strip_binary_directory: false
+    builds_info:
+      group: root
+      owner: root
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+      - CHANGELOG.md
+      - SUPPORT.md
+      - SECURITY.md
+      - docs/QUICKSTART.md
+      - docs/api/api-reference.md
+      - src: config/config.example.yaml
+        strip_parent: true
+        info:
+          mode: 0o644
+
+# ---------------------------------------------------------------------------
+# Linux packages (deb/rpm) so enterprises can install via their package
+# manager instead of filing a "how do I install this" ticket.
+# ---------------------------------------------------------------------------
+nfpms:
+  - id: loopworker-packages
+    package_name: loopworker
+    ids:
+      - loopworker
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: "TODO(owner) — publishable vendor name, must be confirmed by the human owner"
+    homepage: "https://github.com/loopgap/loopworker"
+    maintainer: "TODO(owner) <todo-owner@example.invalid>"
+    description: "LoopWorker — WASM work-loop workflow engine (server + CLI)"
+    license: "MIT"
+    formats:
+      - deb
+      - rpm
+    priority: optional
+    contents:
+      - src: /usr/bin/loopworker
+        dst: /usr/bin/loopworker
+        file_info:
+          mode: 0755
+      - src: config/config.example.yaml
+        dst: /etc/loopworker/config.example.yaml
+        file_info:
+          mode: 0644
+      - dst: /var/lib/loopworker
+        type: dir
+        file_info:
+          mode: 0750
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+  # Archives, binaries, packages and SBOMs are all goreleaser artifacts, so they
+  # are covered by this file automatically. Do not add `extra_files` globs here:
+  # a glob that matches nothing fails the release, which is exactly what happened
+  # when `./dist/*.spdx.json` was listed while `--skip=sbom` was in use.
+
+sboms:
+  - id: loopworker-spdx
+    artifacts: archive
+    documents:
+      - "${artifact}.spdx.json"
+    cmd: syft
+    args:
+      - "$artifact"
+      - "--output"
+      - "spdx-json=$document"
+    env:
+      - SYFT_FILE_METADATA_SELECTION=inputs
+
+signs:
+  # Keyless cosign signing via GitHub Actions OIDC (no long-lived secrets to
+  # manage = zero after-sales support burden for key rotation).
+  # Requires: sigstore/cosign-installer + `id-token: write` permission.
+  # The human owner must pin COSIGN_CERTURE_IDENTITY/ISSUER to their own
+  # GitHub org/repo — see .release/SIGNING.md.
+  - id: cosign-checksums
+    cmd: cosign
+    certificate: "${artifact}.pem"
+    output: true
+    artifacts: checksum
+    args:
+      - sign-blob
+      - "--yes"
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+
+# ---------------------------------------------------------------------------
+# Homebrew tap (macOS self-service install: `brew install loopgap/tap/loopworker`)
+# Requires the tap repo to exist — release.yml's "Preflight" job blocks the
+# release with a human-readable error while an owner placeholder is still present,
+# so this can never publish to a fictional repo.
+# ---------------------------------------------------------------------------
+brews:
+  - name: loopworker
+    ids:
+      - loopworker
+    repository:
+      owner: "loopgap"
+      name: homebrew-tap
+      branch: main
+      # Token used to push the formula; release.yml passes the workflow GITHUB_TOKEN.
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    commit_author:
+      name: "loopworker-ci"
+      email: "ci@localhost"
+    commit_msg_template: "Release formula for {{ .ProjectName }} version {{ .Tag }}"
+    homepage: "https://github.com/loopgap/loopworker"
+    description: "Go-native WASM work-loop workflow engine with priority scheduling and self-healing"
+    license: "MIT"
+    dependencies: []
+    install: |
+      bin.install "loopworker"
+    post_install: |
+      # Start the server with `loopworker` (listens on :19527). No other setup required.
+    test: |
+      system "#{bin}/loopworker", "version"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-SNAPSHOT-{{ .ShortCommit }}"
+
+changelog:
+  use: conventional
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^Merge"

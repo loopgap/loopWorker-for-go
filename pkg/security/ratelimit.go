@@ -10,6 +10,8 @@ type RateLimiter struct {
 	mu       sync.RWMutex
 	rate     int
 	window   time.Duration
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 type Visitor struct {
@@ -18,15 +20,33 @@ type Visitor struct {
 }
 
 func NewRateLimiter(rate int, window time.Duration) *RateLimiter {
+	if rate < 1 {
+		rate = 1
+	}
+	if window <= 0 {
+		window = time.Minute
+	}
 	rl := &RateLimiter{
 		visitors: make(map[string]*Visitor),
 		rate:     rate,
 		window:   window,
+		done:     make(chan struct{}),
 	}
 
 	go rl.cleanup()
 	return rl
 }
+
+// Stop terminates the background cleanup goroutine. Safe to call more than once.
+func (rl *RateLimiter) Stop() {
+	rl.stopOnce.Do(func() { close(rl.done) })
+}
+
+// Rate reports the configured request allowance per window.
+func (rl *RateLimiter) Rate() int { return rl.rate }
+
+// Window reports the configured sliding window.
+func (rl *RateLimiter) Window() time.Duration { return rl.window }
 
 func (rl *RateLimiter) Allow(ip string) bool {
 	rl.mu.Lock()
@@ -71,18 +91,50 @@ func (rl *RateLimiter) Reset(ip string) {
 }
 
 func (rl *RateLimiter) cleanup() {
-	ticker := time.NewTicker(time.Minute)
+	interval := rl.window
+	if interval > time.Minute || interval < time.Second {
+		interval = time.Minute
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		rl.mu.Lock()
-		for ip, visitor := range rl.visitors {
-			if time.Since(visitor.lastSeen) > rl.window*2 {
-				delete(rl.visitors, ip)
+	for {
+		select {
+		case <-rl.done:
+			return
+		case <-ticker.C:
+			rl.mu.Lock()
+			for ip, visitor := range rl.visitors {
+				if time.Since(visitor.lastSeen) > rl.window*2 {
+					delete(rl.visitors, ip)
+				}
 			}
+			rl.mu.Unlock()
 		}
-		rl.mu.Unlock()
 	}
+}
+
+// RetryAfter reports how long a caller that was just denied should wait.
+func (rl *RateLimiter) RetryAfter(key string) time.Duration {
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+
+	visitor, exists := rl.visitors[key]
+	if !exists {
+		return rl.window
+	}
+	remaining := rl.window - time.Since(visitor.lastSeen)
+	if remaining <= 0 {
+		return time.Second
+	}
+	return remaining
+}
+
+// Size reports the number of tracked callers (used by leak tests).
+func (rl *RateLimiter) Size() int {
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+	return len(rl.visitors)
 }
 
 type InputValidator struct {

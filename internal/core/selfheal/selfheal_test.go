@@ -18,8 +18,22 @@ func TestNewSelfHealer(t *testing.T) {
 	}
 }
 
+// fastConfig returns a SelfHealConfig suitable for unit tests — minimal delays.
+func fastConfig() SelfHealConfig {
+	return SelfHealConfig{
+		MaxRetries:        3,
+		RetryDelay:        time.Millisecond,
+		MaxRetryDelay:     10 * time.Millisecond,
+		CircuitThreshold:  5,
+		CircuitTimeout:    10 * time.Millisecond,
+		HealthInterval:    time.Second,
+		IncidentRetention: time.Hour,
+		HalfOpenProbes:    1,
+	}
+}
+
 func TestExecuteWithRecoverySuccess(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	ctx := context.Background()
 
 	calls := int32(0)
@@ -37,7 +51,7 @@ func TestExecuteWithRecoverySuccess(t *testing.T) {
 }
 
 func TestExecuteWithRecoveryRetrySuccess(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	ctx := context.Background()
 
 	calls := int32(0)
@@ -77,7 +91,7 @@ func TestExecuteWithRecoveryExhausted(t *testing.T) {
 }
 
 func TestCircuitBreakerOpen(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	cb := sh.GetCircuitBreaker("test")
 
 	for i := 0; i < 5; i++ {
@@ -94,7 +108,7 @@ func TestCircuitBreakerOpen(t *testing.T) {
 }
 
 func TestCircuitBreakerRecovery(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	cb := sh.GetCircuitBreaker("test")
 	cb.timeout = 10 * time.Millisecond
 
@@ -114,7 +128,7 @@ func TestCircuitBreakerRecovery(t *testing.T) {
 }
 
 func TestCircuitBreakerReset(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	cb := sh.GetCircuitBreaker("test")
 
 	for i := 0; i < 5; i++ {
@@ -129,7 +143,7 @@ func TestCircuitBreakerReset(t *testing.T) {
 }
 
 func TestHealthCheck(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	healthy := true
 
 	sh.RegisterHealthCheck(&HealthCheck{
@@ -151,7 +165,7 @@ func TestHealthCheck(t *testing.T) {
 }
 
 func TestIncidentRecording(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	ctx := context.Background()
 
 	_ = sh.ExecuteWithRecovery(ctx, "test", func(ctx context.Context) error {
@@ -165,7 +179,7 @@ func TestIncidentRecording(t *testing.T) {
 }
 
 func TestRecoveryLog(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	ctx := context.Background()
 
 	_ = sh.ExecuteWithRecovery(ctx, "test", func(ctx context.Context) error {
@@ -179,7 +193,7 @@ func TestRecoveryLog(t *testing.T) {
 }
 
 func TestHealthStatusDegraded(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 
 	for i := 0; i < 5; i++ {
 		sh.recordIncident("test", SeverityMedium, errors.New("error"))
@@ -230,7 +244,7 @@ func TestRecoveryActionString(t *testing.T) {
 }
 
 func TestCircuitBreakerClosedToOpen(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	cb := sh.GetCircuitBreaker("svc")
 	if cb.GetState() != CircuitClosed {
 		t.Error("should start closed")
@@ -248,7 +262,7 @@ func TestCircuitBreakerClosedToOpen(t *testing.T) {
 }
 
 func TestCircuitBreakerHalfOpenToClosed(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	cb := sh.GetCircuitBreaker("svc")
 	cb.timeout = 10 * time.Millisecond
 	for i := 0; i < 5; i++ {
@@ -271,7 +285,7 @@ func TestCircuitBreakerHalfOpenToClosed(t *testing.T) {
 }
 
 func TestCircuitBreakerHalfOpenToOpen(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	cb := sh.GetCircuitBreaker("svc")
 	cb.timeout = 10 * time.Millisecond
 	for i := 0; i < 5; i++ {
@@ -289,6 +303,7 @@ func TestCircuitBreakerHalfOpenToOpen(t *testing.T) {
 }
 
 func TestExponentialBackoff(t *testing.T) {
+	// Use default delay values for backoff calculation tests
 	sh := NewSelfHealer(DefaultConfig())
 	tests := []struct {
 		attempt int
@@ -319,7 +334,7 @@ func TestBackoffMaxDelay(t *testing.T) {
 }
 
 func TestExecuteWithRecoveryContextCancelled(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := sh.ExecuteWithRecovery(ctx, "test", func(ctx context.Context) error { return errors.New("should not matter") })
@@ -329,7 +344,7 @@ func TestExecuteWithRecoveryContextCancelled(t *testing.T) {
 }
 
 func TestHealthStatusCritical(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	sh.recordIncident("test", SeverityCritical, errors.New("critical"))
 	status := sh.GetHealthStatus()
 	if status != HealthCritical {
@@ -338,7 +353,7 @@ func TestHealthStatusCritical(t *testing.T) {
 }
 
 func TestHealthStatusDegradedFewIncidents(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	sh.recordIncident("test", SeverityLow, errors.New("low"))
 	sh.recordIncident("test", SeverityMedium, errors.New("med"))
 	status := sh.GetHealthStatus()
@@ -362,7 +377,7 @@ func TestHealthStatusString(t *testing.T) {
 }
 
 func TestExecuteWithRecoveryCircuitBreakerOpen(t *testing.T) {
-	config := DefaultConfig()
+	config := fastConfig()
 	config.CircuitThreshold = 2
 	sh := NewSelfHealer(config)
 	ctx := context.Background()
@@ -378,7 +393,7 @@ func TestExecuteWithRecoveryCircuitBreakerOpen(t *testing.T) {
 // 并发压力测试
 
 func TestConcurrentExecuteWithRecovery(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
@@ -413,7 +428,7 @@ func TestConcurrentExecuteWithRecovery(t *testing.T) {
 }
 
 func TestConcurrentCircuitBreakerOperations(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	cb := sh.GetCircuitBreaker("concurrent-test")
 
 	var wg sync.WaitGroup
@@ -441,7 +456,7 @@ func TestConcurrentCircuitBreakerOperations(t *testing.T) {
 }
 
 func TestConcurrentGetCircuitBreaker(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 
 	var wg sync.WaitGroup
 	breakers := make([]*CircuitBreaker, 100)
@@ -466,7 +481,7 @@ func TestConcurrentGetCircuitBreaker(t *testing.T) {
 }
 
 func TestConcurrentRecordIncident(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 
 	var wg sync.WaitGroup
 	n := 100
@@ -490,7 +505,7 @@ func TestConcurrentRecordIncident(t *testing.T) {
 }
 
 func TestConcurrentHealthStatus(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 
 	var wg sync.WaitGroup
 	n := 100
@@ -516,7 +531,7 @@ func TestConcurrentHealthStatus(t *testing.T) {
 }
 
 func TestConcurrentRecoveryLog(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
@@ -546,7 +561,7 @@ func TestConcurrentRecoveryLog(t *testing.T) {
 }
 
 func TestConcurrentAllowRequest(t *testing.T) {
-	sh := NewSelfHealer(DefaultConfig())
+	sh := NewSelfHealer(fastConfig())
 	cb := sh.GetCircuitBreaker("test")
 
 	var wg sync.WaitGroup

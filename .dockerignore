@@ -1,9 +1,51 @@
+# .dockerignore for LoopWorker
+#
+# Rule of thumb: everything the *server binary* needs to compile must be IN.
+# Two bugs this file used to cause:
+#   1. `web/` was excluded wholesale — harmless for the build, but it silently
+#      meant the embedded UI could never be rebuilt in-image. Now stated
+#      explicitly: web/canvas (Node/Vite sources + node_modules) is excluded on
+#      purpose because the Go server never compiles it; the pre-built assets it
+#      DOES embed live in pkg/api/dist and are always copied in.
+#   2. No `.git` / `dist` exclusions => goreleaser output and VCS metadata were
+#      copied into the build context on every CI run.
+
+# --- VCS / CI / local scratch ------------------------------------------------
 .git
+.gitattributes
+.github
 .gitignore
-*.md
-docs/
-web/
+tmp-audit/
 bin/
+dist/
 coverage.out
 coverage.html
 *.exe
+*.tmpfmt
+
+# --- Docs are not inputs to the server binary -------------------------------
+docs/
+*.md
+!README.md
+
+# --- UI: exclude the Node workspace, keep the embedded assets ----------------
+# web/canvas = Vite/React sources + lockfile; NOT built inside this image and
+# NOT part of the supported product surface (.release/SCOPE-PROPOSAL.md).
+web/
+# pkg/api/dist is what `//go:embed all:dist` in pkg/api/api.go reads. Negate it
+# so the `web/`-style exclusions can never hide an embed input.
+!pkg/api/dist
+!pkg/api/dist/**
+
+# --- Release/packaging tooling that must not pollute the build cache --------
+.release/tools/**/coverage.out
+Dockerfile
+.dockerignore
+Makefile
+
+# --- Editor / OS junk --------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

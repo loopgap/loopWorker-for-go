@@ -1,5 +1,18 @@
 # LoopWorker 全量缺口审计报告 & 完善 PRD
 
+> ⚠️ **历史文档，勿照此引用。** 本文档是 2026-08-15 的缺口审计快照，其中每一条结论都只对当时的
+> 树成立。当前状态（2026-10-05，闸门 G1/G2/G3 达成，`-race` 零数据竞争，覆盖率 80.3%）见
+> [AGENT-COLLABORATION-SPEC.md](../../AGENT-COLLABORATION-SPEC.md) §8 与 §10。
+> 已知本报告中已被推翻的具体断言：
+> - 「LICENSE 完整（MIT，版权人 loopgap）」——`loopgap`/`loopgad` 均非可授权的法律主体，
+>   `LICENSE` 现为显式 `TODO(owner)` 占位符并**阻断发布**（relcheck preflight）。
+> - 「前端 UI 是占位符」——`pkg/api/dist/` 已是真实构建产物。
+> - 「无 CI」——`.github/workflows/` 已有 ci/release 两个工作流。
+> - 「5 个 CLI 工具源码缺失」——`loopctl` 已重写，其余 4 个仍存在但只测本地 `time.Sleep`。
+> - 「race 检测失败」——`-race` 现为 0 `DATA RACE`。
+>
+> 保留本文件的目的是让「当时缺什么」可追溯，不作为现状依据。
+
 > 文档版本：v1.0
 > 作者：许清楚（产品经理）
 > 日期：2026-08-15

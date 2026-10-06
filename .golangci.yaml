@@ -1,0 +1,63 @@
+# golangci-lint v2 configuration (CI installs v2.9.0, pinned).
+#
+# Deliberately modest: the `standard` set (errcheck, govet, ineffassign,
+# staticcheck, unused) plus six targeted additions. `make lint` used to be
+# `go vet` alone, which catches none of what these do.
+#
+# NOT enabled on purpose: gosec, revive, funlen, gocyclo, varnamelen, stylecheck
+# naming rules — they would generate hundreds of style findings that bury real
+# defects, and renaming code is not a defect gate. Revisit once the pipeline is
+# green. Vulnerability risk is covered by govulncheck + Trivy, not gosec.
+version: "2"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      # loopworker's own packages must sort above third-party imports.
+      local-prefixes:
+        - loopworker
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused
+  default: standard
+  enable:
+    # goerr113-style discipline, expressed the maintainable way: forbid
+    # `err == SomeErr` / `fmt.Errorf("%v", err)` and require errors.Is/As.
+    - errorlint
+    # sentinel error names must end in Err / error types in Error (keeps
+    # pkg/errors coherent, which has 42 sentinels).
+    - errname
+    # `if err != nil { return nil }` — the silent-failure pattern.
+    - nilerr
+    - bodyclose
+    - noctx
+    - contextcheck
+    - copyloopvar
+  settings:
+    errcheck:
+      check-type-assertions: true
+    errorlint:
+      errorf: true
+      comparison: true
+      asserts: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - stdlib-error-handling120+
+    rules:
+      # Tests may ignore returned errors and use context.Background().
+      - path: (_test\.go|^integration/)
+        linters:
+          - errcheck
+          - contextcheck
+          - noctx
+    paths:
+      - tmp-audit
+      - dist
+      - web/canvas

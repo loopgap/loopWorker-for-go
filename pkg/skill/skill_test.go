@@ -396,3 +396,267 @@ func TestConcurrentBuildContext(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// ---- Debugger tests ----
+
+func TestNewDebugger(t *testing.T) {
+	d := NewDebugger()
+	if d == nil {
+		t.Fatal("expected non-nil debugger")
+	}
+	if d.minLevel != LevelDebug {
+		t.Errorf("expected minLevel DEBUG, got %s", d.minLevel)
+	}
+}
+
+func TestDebuggerLogLevel(t *testing.T) {
+	d := NewDebugger()
+
+	d.Log(LevelInfo, "comp", "hello", nil)
+	logs := d.GetLogs(LevelDebug)
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log, got %d", len(logs))
+	}
+	if logs[0].Level != LevelInfo {
+		t.Errorf("expected INFO, got %s", logs[0].Level)
+	}
+	if logs[0].Component != "comp" {
+		t.Errorf("expected comp, got %s", logs[0].Component)
+	}
+	if logs[0].Message != "hello" {
+		t.Errorf("expected hello, got %s", logs[0].Message)
+	}
+}
+
+func TestDebuggerLogFilteredByLevel(t *testing.T) {
+	d := NewDebugger()
+	d.SetMinLevel(LevelWarn)
+
+	d.Log(LevelDebug, "c", "msg1", nil)
+	d.Log(LevelInfo, "c", "msg2", nil)
+	d.Log(LevelWarn, "c", "msg3", nil)
+	d.Log(LevelError, "c", "msg4", nil)
+
+	logs := d.GetLogs(LevelDebug)
+	if len(logs) != 2 {
+		t.Errorf("expected 2 logs (warn+error), got %d", len(logs))
+	}
+}
+
+func TestDebuggerLogByComponent(t *testing.T) {
+	d := NewDebugger()
+
+	d.Log(LevelInfo, "comp-a", "msg1", nil)
+	d.Log(LevelInfo, "comp-b", "msg2", nil)
+	d.Log(LevelInfo, "comp-a", "msg3", nil)
+
+	logs := d.GetLogsByComponent("comp-a")
+	if len(logs) != 2 {
+		t.Errorf("expected 2 logs for comp-a, got %d", len(logs))
+	}
+}
+
+func TestDebuggerLogWithFields(t *testing.T) {
+	d := NewDebugger()
+
+	fields := map[string]interface{}{"key": "value", "count": 42}
+	d.Log(LevelInfo, "c", "msg", fields)
+
+	logs := d.GetLogs(LevelDebug)
+	if len(logs) != 1 {
+		t.Fatal("expected 1 log")
+	}
+	if logs[0].Fields["key"] != "value" {
+		t.Errorf("expected field key=value, got %v", logs[0].Fields["key"])
+	}
+}
+
+func TestDebuggerConvenienceMethods(t *testing.T) {
+	d := NewDebugger()
+
+	d.Debug("c", "d", nil)
+	d.Info("c", "i", nil)
+	d.Warn("c", "w", nil)
+	d.Error("c", "e", nil)
+
+	logs := d.GetLogs(LevelDebug)
+	if len(logs) != 4 {
+		t.Fatalf("expected 4 logs, got %d", len(logs))
+	}
+
+	expectedLevels := []LogLevel{LevelDebug, LevelInfo, LevelWarn, LevelError}
+	for i, log := range logs {
+		if log.Level != expectedLevels[i] {
+			t.Errorf("log %d: expected %s, got %s", i, expectedLevels[i], log.Level)
+		}
+	}
+}
+
+func TestDebuggerCallerInfo(t *testing.T) {
+	d := NewDebugger()
+
+	d.Log(LevelInfo, "c", "msg", nil)
+	logs := d.GetLogs(LevelDebug)
+	if len(logs) != 1 {
+		t.Fatal("expected 1 log")
+	}
+	// Caller info should contain the test file name
+	if logs[0].Caller == "unknown" {
+		t.Error("expected caller info, got 'unknown'")
+	}
+}
+
+func TestDebuggerBreakpoints(t *testing.T) {
+	d := NewDebugger()
+
+	actionCalled := false
+	d.AddBreakpoint("bp1", "mycomp", nil, func() { actionCalled = true })
+
+	// Logging for the breakpoint's component should trigger it
+	d.Log(LevelInfo, "mycomp", "triggered", nil)
+
+	if !actionCalled {
+		t.Error("expected breakpoint action to be called")
+	}
+
+	bps := d.GetBreakpoints()
+	if len(bps) != 1 {
+		t.Fatalf("expected 1 breakpoint, got %d", len(bps))
+	}
+	if bps[0].HitCount != 1 {
+		t.Errorf("expected hit count 1, got %d", bps[0].HitCount)
+	}
+}
+
+func TestDebuggerBreakpointCondition(t *testing.T) {
+	d := NewDebugger()
+
+	called := false
+	d.AddBreakpoint("bp1", "c", func() bool { return false }, func() { called = true })
+
+	d.Log(LevelInfo, "c", "msg", nil)
+
+	if called {
+		t.Error("breakpoint action should not be called when condition returns false")
+	}
+}
+
+func TestDebuggerBreakpointDisabled(t *testing.T) {
+	d := NewDebugger()
+
+	called := false
+	d.AddBreakpoint("bp1", "c", nil, func() { called = true })
+	d.DisableBreakpoint("bp1")
+
+	d.Log(LevelInfo, "c", "msg", nil)
+
+	if called {
+		t.Error("disabled breakpoint should not fire")
+	}
+
+	// Re-enable and try again
+	d.EnableBreakpoint("bp1")
+	d.Log(LevelInfo, "c", "msg2", nil)
+
+	if !called {
+		t.Error("re-enabled breakpoint should fire")
+	}
+}
+
+func TestDebuggerRemoveBreakpoint(t *testing.T) {
+	d := NewDebugger()
+
+	called := false
+	d.AddBreakpoint("bp1", "c", nil, func() { called = true })
+	d.RemoveBreakpoint("bp1")
+
+	d.Log(LevelInfo, "c", "msg", nil)
+
+	if called {
+		t.Error("removed breakpoint should not fire")
+	}
+
+	bps := d.GetBreakpoints()
+	if len(bps) != 0 {
+		t.Errorf("expected 0 breakpoints, got %d", len(bps))
+	}
+}
+
+func TestDebuggerTakeSnapshot(t *testing.T) {
+	d := NewDebugger()
+
+	d.TakeSnapshot()
+	snapshots := d.GetSnapshots()
+
+	if len(snapshots) != 1 {
+		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
+	}
+
+	snap := snapshots[0]
+	if snap.Timestamp.IsZero() {
+		t.Error("expected non-zero timestamp")
+	}
+	if snap.Goroutines < 1 {
+		t.Errorf("expected at least 1 goroutine, got %d", snap.Goroutines)
+	}
+}
+
+func TestDebuggerWatchers(t *testing.T) {
+	d := NewDebugger()
+
+	d.AddWatcher("uptime", func() interface{} { return 42 })
+	d.AddWatcher("name", func() interface{} { return "test" })
+
+	watchers := d.GetWatchers()
+	if len(watchers) != 2 {
+		t.Fatalf("expected 2 watchers, got %d", len(watchers))
+	}
+	if watchers["uptime"] != 42 {
+		t.Errorf("expected uptime 42, got %v", watchers["uptime"])
+	}
+	if watchers["name"] != "test" {
+		t.Errorf("expected name test, got %v", watchers["name"])
+	}
+}
+
+func TestDebuggerClear(t *testing.T) {
+	d := NewDebugger()
+
+	d.Log(LevelInfo, "c", "msg", nil)
+	d.TakeSnapshot()
+
+	d.Clear()
+
+	logs := d.GetLogs(LevelDebug)
+	if len(logs) != 0 {
+		t.Errorf("expected 0 logs after clear, got %d", len(logs))
+	}
+	snapshots := d.GetSnapshots()
+	if len(snapshots) != 0 {
+		t.Errorf("expected 0 snapshots after clear, got %d", len(snapshots))
+	}
+}
+
+func TestLogLevelString(t *testing.T) {
+	tests := []struct {
+		l    LogLevel
+		want string
+	}{
+		{LevelDebug, "DEBUG"},
+		{LevelInfo, "INFO"},
+		{LevelWarn, "WARN"},
+		{LevelError, "ERROR"},
+		{LevelFatal, "FATAL"},
+	}
+	for _, tt := range tests {
+		if got := tt.l.String(); got != tt.want {
+			t.Errorf("LogLevel(%d).String() = %s, want %s", tt.l, got, tt.want)
+		}
+	}
+}
+
+func TestErrSkillNotFound(t *testing.T) {
+	if ErrSkillNotFound.Error() != "required skill not registered" {
+		t.Errorf("unexpected error message: %s", ErrSkillNotFound.Error())
+	}
+}

@@ -1,3 +1,37 @@
+// Package workflow implements a workflow engine supporting sequential, DAG, and parallel patterns.
+//
+// Architecture Pattern: Workflow Engine with DAG Execution
+// =========================================================
+// The WorkflowEngine orchestrates multi-step workflows where steps can have dependencies:
+//
+//	┌─────────┐     ┌─────────────┐     ┌───────────┐
+//	│  extract │────►│  transform  │────►│   load    │
+//	└─────────┘     └─────────────┘     └───────────┘
+//	     │                                      ▲
+//	     └──────────── validate ────────────────┘
+//
+// Three workflow types are supported:
+//  1. Workflow: Sequential execution with topological ordering (Kahn's algorithm)
+//  2. DAGWorkflow: Explicit edge-based dependency graph
+//  3. ParallelWorkflow: Concurrent execution with semaphore-based concurrency control
+//
+// Teaching Note: Topological Sort (Kahn's Algorithm)
+// ===================================================
+// The computeExecutionOrder uses Kahn's algorithm:
+//  1. Calculate in-degree for each node
+//  2. Queue nodes with in-degree 0
+//  3. Process queue: remove node, decrease neighbors' in-degree
+//  4. If sorted count ≠ node count → cycle detected
+//
+// This is O(V + E) where V = steps, E = dependencies.
+//
+// Teaching Note: Retry with Exponential Backoff
+// ==============================================
+// Steps can specify a RetryPolicy with exponential backoff:
+//
+//	wait = initialWait * multiplier^attempt
+//
+// This prevents overwhelming a failing downstream service with rapid retries.
 package workflow
 
 import (
@@ -82,6 +116,13 @@ type Workflow struct {
 	CompletedAt *time.Time
 	Error       error
 	mu          sync.RWMutex
+	// execMu is held for the whole of one execution. A registered Workflow is a
+	// single shared instance and executeWorkflow writes State and StepStatus
+	// from inside the step actions, so two overlapping runs would be two
+	// goroutines writing one map - "concurrent map writes", which kills the
+	// process rather than returning an error. It is a lock, not a latch: the
+	// next run acquires it once the previous one reaches a terminal state.
+	execMu sync.Mutex
 }
 
 type WorkflowEngine struct {
@@ -100,6 +141,21 @@ type TaskDispatcher interface {
 	WaitForTask(ctx context.Context, taskID string) (*TaskRef, error)
 	// GetTask returns the current state of a task by ID.
 	GetTask(taskID string) (*TaskRef, bool)
+}
+
+// TaskQueuer is the second half of creating a runnable task.
+//
+// A task that has been created but never queued is picked up by nobody: it sits
+// in "pending" forever and WaitForTask blocks until the caller's context dies.
+// The scheduler's own REST path pairs CreateTask with QueueTask
+// (pkg/api/handlers_task_mutate.go), so a workflow step must pair them too.
+//
+// This is a separate interface rather than a method on TaskDispatcher because a
+// dispatcher that cannot queue is still useful for lookups, and because the
+// scheduler bridge has to grow the method before this one can be folded in.
+type TaskQueuer interface {
+	// QueueTask moves a created task into the run queue and wakes the workers.
+	QueueTask(ctx context.Context, taskID string) error
 }
 
 // TaskRef is a workflow-agnostic reference to a scheduled task.
@@ -205,6 +261,16 @@ func (we *WorkflowEngine) Execute(ctx context.Context, workflowID string) error 
 }
 
 func (we *WorkflowEngine) executeWorkflow(ctx context.Context, workflow *Workflow) error {
+	// Refuse an overlapping run rather than corrupt the one in flight. This
+	// guard only became reachable when the server started registering
+	// workflows: before that nothing in production called Execute at all.
+	if !workflow.execMu.TryLock() {
+		return fmt.Errorf("workflow %s is already running\n"+
+			"  cause: a registered workflow holds one execution at a time, and run is in progress\n"+
+			"  fix:   poll GET /api/v1/workflow/%s until its status is completed or failed, then submit again", workflow.ID, workflow.ID)
+	}
+	defer workflow.execMu.Unlock()
+
 	workflow.mu.Lock()
 	workflow.Status = WorkflowRunning
 	now := time.Now()
@@ -300,10 +366,14 @@ func (we *WorkflowEngine) executeWorkflow(ctx context.Context, workflow *Workflo
 
 	// Publish workflow completed event
 	if we.eventBus != nil {
+		var wfDuration time.Duration
+		if workflow.StartedAt != nil {
+			wfDuration = completedTime.Sub(*workflow.StartedAt)
+		}
 		we.publishWorkflowEvent(ctx, workflow.ID, event.EventWorkflowCompleted, event.WorkflowCompletedPayload{
 			WorkflowID: workflow.ID,
 			StepsTotal: len(workflow.StepOrder),
-			Duration:   0,
+			Duration:   wfDuration,
 		})
 	}
 

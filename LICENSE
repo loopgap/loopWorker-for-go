@@ -1,6 +1,30 @@
+ACTION REQUIRED — THIS FILE MUST NOT SHIP AS-IS.
+---------------------------------------------------------------------------
+Replace the copyright line below with the real legal name of the
+person or entity that owns this code and can grant these rights.
+
+Evidence from this repository (verified 2026-10-05):
+  * The previous text said "Copyright (c) 2026 loopgap".
+  * `git log --format='%an <%ae>' | sort | uniq -c` -> 55/55 commits authored
+    by `loopgad <3280646246@qq.com>`.
+  * Neither "loopgap" nor "loopgad" is a registered entity name, and a personal
+    QQ mailbox is not a licensable legal identity. A buyer's counsel will
+    reject that, and it is not enforceable against infringers.
+
+Also decide (before the first paid sale):
+  * MIT below means a buyer may freely redistribute the core. The commercial
+    model therefore has to be open-core (MIT core + separately licensed
+    enterprise layer), not "source we sell".
+  * DCO sign-off is enforced in CI (`.github/workflows/ci.yml`, job `dco`) so
+    that every future contribution is certifiable as self-authored, which is
+    what makes later relicensing of the enterprise layer legally clean. Note
+    the gap: the job only inspects the pull-request range, and none of the 55
+    commits made before that job existed carry a `Signed-off-by` trailer.
+---------------------------------------------------------------------------
+
 MIT License
 
-Copyright (c) 2026 loopgap
+Copyright (c) 2026 TODO(owner)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

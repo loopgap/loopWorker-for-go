@@ -1,0 +1,48 @@
+# CODEOWNERS — who is on the hook when a file changes.
+#
+# Note: GitHub requires every listed team/username to exist in THIS
+# repository's org, otherwise the file is accepted but every PR shows
+# "Code owners can't be assigned" and the branch-protection "require review
+# from code owners" check blocks merges. Replace before enabling that rule.
+# Until the real handle is confirmed, this file documents intended ownership so
+# reviewers can be routed by hand.
+
+# Whole product surface (release artifacts, CI, licensing, docs) — one human
+# owner is enough for a self-service product; anything broader is support debt.
+* @loopgap
+
+# Delivery pipeline: anything that can ship an artifact to a customer.
+.github/workflows/     @loopgap
+.goreleaser.yaml       @loopgap
+Dockerfile             @loopgap
+.dockerignore          @loopgap
+Makefile               @loopgap
+.release/              @loopgap
+LICENSE                @loopgap
+NOTICE                 @loopgap
+
+# Engine core (the MIT layer).
+/internal/             @loopgap
+/pkg/event/            @loopgap
+/pkg/workflow/         @loopgap
+/pkg/plugin/           @loopgap
+/pkg/skill/            @loopgap
+
+# Public HTTP contract. Changing a route or response shape without a versioned
+# deprecation note is exactly what generates tickets, hence explicit ownership.
+/pkg/api/              @loopgap
+/pkg/server/           @loopgap
+/pkg/client/           @loopgap
+/pkg/security/         @loopgap
+docs/api/              @loopgap
+
+# Deliberately de-scoped / cut-candidates (see .release/SCOPE-PROPOSAL.md):
+# these must not gain new dependencies without an owner's decision.
+web/canvas/            @loopgap
+cmd/loopbench/         @loopgap
+cmd/loopsim/           @loopgap
+cmd/loopdebug/         @loopgap
+cmd/loopctl/           @loopgap
+cmd/loopwatch/         @loopgap
+docs/product/          @loopgap
+.workbuddy/            @loopgap

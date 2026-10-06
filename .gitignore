@@ -29,6 +29,10 @@ go.work.sum
 # ==================== Rust / WASM ====================
 /target/
 *.wasm
+# ...except the two artifacts that are inputs, not build droppings: the example
+# plugin a customer can actually run, and the copy pkg/plugin's tests load.
+!examples/hello-plugin/hello.wasm
+!pkg/plugin/testdata/hello.wasm
 
 # ==================== Node.js / Web ====================
 node_modules/
@@ -73,6 +77,10 @@ logs/
 .env.*.local
 *.pem
 *.key
+
+# ==================== Agent Scratch Space ====================
+# Agent drafts / audit output. `_` prefix is ignored by the go toolchain.
+_scratch/
 
 # ==================== Temporary Scripts ====================
 fix_encoding.py

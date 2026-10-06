@@ -1,6 +1,15 @@
 # LoopWorker 平台架构深度分析
 
-> 基于源代码逐层解构的工业级 WASM 工作流引擎架构探索
+> ⚠️ **阅读前必读：本文档写于 2026-08 之前，描述的是设计意图，不是当前实现的逐层事实。**
+> 已在文中就地标注的偏差：
+> - **§11.1 / §11.2 的审计日志、密码登录、账户锁定未接线**（`SecurityManager` 无生产调用方）。
+> - **持久化不是 GORM**，是 `database/sql` + `modernc.org/sqlite`（gorm 已移除）。
+> - **前端**：`web/canvas` 的 React 源码不在本仓库，仓库内只有构建产物 `pkg/api/dist/`
+>   （`staticHandler` 提供）。`Liquid Glass` 主题相关章节描述的是那份产物，不是可二次开发的源码。
+> - 指标与日志端点在 **loopback admin 监听器**（`server.admin_port`），不在 `/api/v1/*` 上；
+>   `pkg/api/openapi.json` 是路由的权威来源，`TestOpenAPISpecMatchesRegisteredRoutes` 会让文档漂移变红。
+>
+> 逐条实测状态见 [AGENT-COLLABORATION-SPEC.md](../AGENT-COLLABORATION-SPEC.md) §8/§10。
 
 ---
 
@@ -42,7 +51,7 @@
 | 核心模块代码量 | ~4,011 行（9 个核心文件） |
 | 默认端口 | 19527 |
 | WASM 运行时 | wazero (纯 Go 实现，无需 CGO) |
-| 持久化 | SQLite (GORM) |
+| 持久化 | SQLite（`database/sql` + `modernc.org/sqlite`，纯 Go 驱动） |
 | 前端 | React + ReactFlow (Liquid Glass 主题) |
 
 ### 1.2 目录结构
@@ -203,7 +212,7 @@ func (s *Scheduler) CreateTask(ctx, taskType, config, input) (*Task, error)
 ```
 
 - 生成唯一 ID，初始状态 `Pending`
-- 持久化到 SQLite（通过 GORM）
+- 持久化到 SQLite（`database/sql` + `modernc.org/sqlite`，非 GORM）
 - 发布 `EventTaskCreated` 事件到 EventBus
 - Observer 收到后递增 `tasks_created` Counter
 
@@ -422,7 +431,10 @@ func (s *Scheduler) recoverTasks()
 
 ### 5.5 SQLite 持久化
 
-所有任务状态变更都通过 `saveTask` 同步写入 SQLite。使用 GORM ORM，`TaskModel` 作为持久化模型，通过 JSON 序列化存储 `Config`、`Metadata`、`Dependencies` 等 map/struct 字段。
+所有任务状态变更都通过 `saveTask` 同步写入 SQLite。使用标准库 `database/sql` + `modernc.org/sqlite`
+（纯 Go 驱动，`CGO_ENABLED=0` 即可静态链接、免 C 工具链交叉编译；gorm 已于 2026-10-05 因零 import
+从 `go.mod` 移除）。`TaskModel` 作为持久化模型，通过 JSON 序列化存储 `Config`、`Metadata`、
+`Dependencies` 等 map/struct 字段。
 
 ---
 
@@ -728,9 +740,16 @@ execErr = e.selfHealer.ExecuteWithRecovery(ctx, worker.PluginID, func(innerCtx) 
 ├─────────────────────────────────────────┤
 │  Layer 6: Account Lockout (5 failures)  │ ← 防暴力破解
 ├─────────────────────────────────────────┤
-│  Layer 7: Audit Logging                 │ ← 全操作审计
+│  Layer 7: Audit Logging                 │ ← 未接线，见下方说明
 └─────────────────────────────────────────┘
 ```
+
+> ⚠️ **本节（§11.1 / §11.2）描述的是 `pkg/security.SecurityManager` 的设计能力，不是当前生产链路。**
+> `NewSecurityManager()` **没有任何生产调用方**（只有 `pkg/security` 与 `integration` 的测试构造它），
+> 因此密码登录、账户锁定、审计日志三层在服务端**都不会被触发**。生产实际走的是
+> `pkg/api` + `pkg/security/auth.go` 的 API key / bearer token 链路：认证、RBAC、限流、输入校验、
+> 请求体上限、任务归属隔离都是活的；审计日志不是。改造方向与证据见
+> [AGENT-COLLABORATION-SPEC.md](../AGENT-COLLABORATION-SPEC.md) §8.2。
 
 ### 11.2 防护组件
 
