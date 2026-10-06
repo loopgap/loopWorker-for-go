@@ -254,6 +254,30 @@ func checkMagic(data []byte) error {
 	return nil
 }
 
+// VerifyArtifactDigest checks one artifact against the digest its manifest
+// declares. It is the exported door to checkChecksums for callers that already
+// hold the artifact bytes - pkg/plugin does, because it compiles the module
+// itself instead of going through LoadWasmDir - so there is exactly one
+// implementation of "what a digest mismatch means".
+//
+// declared may be empty, in which case require decides: false accepts a manifest
+// that claims nothing (the historical behaviour), true refuses it, which is
+// what an operator asking for verification actually wants. Either way a refusal
+// wraps ErrChecksumMismatch.
+func VerifyArtifactDigest(name, declared string, data []byte, require bool) error {
+	declared = strings.TrimSpace(declared)
+	err := checkChecksums(&WasmManifest{Name: name, SHA256: declared}, data, LoadOptions{RequireChecksum: require})
+	if err == nil {
+		return nil
+	}
+	if declared == "" {
+		return fmt.Errorf("%w: plugin %q declares no sha256 and checksum verification is on", err, name)
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Errorf("%w: plugin.json declares sha256 %s, the artifact hashes to %s",
+		err, declared, hex.EncodeToString(sum[:]))
+}
+
 func checkChecksums(manifest *WasmManifest, data []byte, opts LoadOptions) error {
 	sum := sha256.Sum256(data)
 	digest := hex.EncodeToString(sum[:])

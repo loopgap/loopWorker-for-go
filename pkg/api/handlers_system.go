@@ -158,19 +158,16 @@ func newWorkflowView(wf *workflow.Workflow) map[string]any {
 		}
 		steps = append(steps, view)
 	}
-	// ponytail: started_at and completed_at are omitted rather than raced.
-	// executeWorkflow writes both under the workflow mutex and pkg/workflow
-	// exports no accessor for them, so reading the fields here is a real data
-	// race - see TestWorkflowStatusEndpointDoesNotRaceWithExecution. Restore
-	// them behind GetStartedAt/GetCompletedAt in pkg/workflow.
 	return map[string]any{
-		"id":         wf.ID,
-		"name":       wf.Name,
-		"status":     workflowStatusName(wf.GetStatus()),
-		"steps":      steps,
-		"step_order": append([]string{}, wf.StepOrder...),
-		"created_at": formatTime(wf.CreatedAt),
-		"error":      workflowErrorText(wf),
+		"id":           wf.ID,
+		"name":         wf.Name,
+		"status":       workflowStatusName(wf.GetStatus()),
+		"steps":        steps,
+		"step_order":   append([]string{}, wf.StepOrder...),
+		"created_at":   formatTime(wf.CreatedAt),
+		"started_at":   formatTimePtr(wf.GetStartedAt()),
+		"completed_at": formatTimePtr(wf.GetCompletedAt()),
+		"error":        workflowErrorText(wf),
 	}
 }
 

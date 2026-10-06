@@ -271,9 +271,17 @@ func (d *Diagnostics) checkSecurity(cfg *config.Config) Check {
 			Hint: "either set server.host=127.0.0.1 for a single machine, or configure a credential before exposing the port - " +
 				"set " + security.EnvAPIKeys + "=id:role:hex-sha256, or security.api_key in the config file"}
 	case !sec.Enabled:
+		// Measured: with security.enabled=false the server still answers an
+		// unauthenticated POST /api/v1/tasks with 401 and reports
+		// auth="required". Nothing outside this function reads the field, so the
+		// key changes no behaviour - it is not a way to open the API. Saying
+		// otherwise would have sent an operator looking for a breach that the
+		// setting cannot create.
 		return Check{Name: "security", Status: StatusWarn,
-			Detail: "security.enabled=false: the server accepts unauthenticated requests",
-			Hint:   "set security.enabled=true and security.auth_required=true plus a security.api_key if the port is reachable from other machines"}
+			Detail: "security.enabled=false, but no code reads it: authentication is enforced identically either way " +
+				"(measured: an unauthenticated write still gets 401). Treat it as an accepted-but-unapplied key",
+			Hint: "to decide whether credentials are required, configure one and check the result; " +
+				"the setting that changes anything is server.host"}
 	case sec.AuthRequired:
 		detail := fmt.Sprintf("API key required on every endpoint except /healthz (key %s), listener %s", maskKey(sec.APIKey), cfg.Addr())
 		if envCount > 0 {
@@ -281,15 +289,20 @@ func (d *Diagnostics) checkSecurity(cfg *config.Config) Check {
 		}
 		return Check{Name: "security", Status: StatusOK, Detail: detail}
 	case envCount > 0:
-		// Keys exist but auth_required is off, so anything unauthenticated still
-		// gets in. Say so: the keys are configured, the policy is not.
-		state := "credentials are registered but auth_required=false, so unauthenticated requests are still served"
+		// Keys exist, and pkg/api enforces them the moment any credential is
+		// configured - security.auth_required does NOT gate enforcement. This used
+		// to say the opposite ("unauthenticated requests are still served"), which
+		// a measured run disproved: no credential -> 401, /api/v1/health reported
+		// auth="required". Telling an operator their unauthenticated API is open
+		// when it is closed is worse than saying nothing.
+		state := fmt.Sprintf("%d credential(s) registered, and every endpoint except the three probes requires one; security.auth_required=false does not relax that", envCount)
 		if public {
-			state += " and any host that can reach " + cfg.Addr() + " can create and run tasks"
+			state += "; the listener is on " + cfg.Addr() + ", so reachability is a network question, not an auth one"
 		}
 		return Check{Name: "security", Status: StatusWarn,
 			Detail: fmt.Sprintf("%d key(s) from %s configured; %s", envCount, security.EnvAPIKeys, state),
-			Hint:   "set security.auth_required=true and security.api_key in the config file to require a credential on every endpoint"}
+			Hint: "auth_required documents whether a credential is mandatory; it is not required to be enabled here. " +
+				"Use `loopworker doctor` after changing server.host, and rotate keys with POST /api/v1/auth/keys"}
 	case public:
 		return Check{Name: "security", Status: StatusWarn,
 			Detail: "auth_required=false while the server listens on all interfaces: any host that can reach " + cfg.Addr() + " can create and run tasks",

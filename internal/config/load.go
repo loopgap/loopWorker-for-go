@@ -399,7 +399,8 @@ func describeKind(path string) string {
 		strings.HasSuffix(path, "_threshold"), strings.HasSuffix(path, "_attempts"),
 		strings.HasSuffix(path, "max_concurrent"):
 		return "integer"
-	case strings.HasSuffix(path, "_load"), strings.HasSuffix(path, "_enabled"), strings.HasSuffix(path, "_required"):
+	case strings.HasSuffix(path, "_load"), strings.HasSuffix(path, "_enabled"), strings.HasSuffix(path, "_required"),
+		strings.HasSuffix(path, "_checksum"):
 		return "true or false"
 	default:
 		return "string"

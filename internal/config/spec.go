@@ -95,6 +95,9 @@ func specs() []spec {
 		{path: "plugins.auto_load", env: []string{"LOOPWORKER_PLUGINS_AUTO_LOAD"},
 			set: func(c *Config, v string) error { return parseBool(&c.Plugins.AutoLoad, v) },
 			get: func(c *Config) string { return strconv.FormatBool(c.Plugins.AutoLoad) }},
+		{path: "plugins.verify_checksum", env: []string{"LOOPWORKER_PLUGINS_VERIFY_CHECKSUM"},
+			set: func(c *Config, v string) error { return parseBool(&c.Plugins.VerifyChecksum, v) },
+			get: func(c *Config) string { return strconv.FormatBool(c.Plugins.VerifyChecksum) }},
 
 		{path: "logging.level", aliases: []string{"log_level"}, env: []string{"LOOPWORKER_LOG_LEVEL"},
 			set: func(c *Config, v string) error { c.Logging.Level = strings.ToLower(strings.TrimSpace(v)); return nil },

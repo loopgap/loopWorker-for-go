@@ -57,6 +57,11 @@ type DataConfig struct {
 type PluginsConfig struct {
 	Dir      string `yaml:"dir" json:"dir"`
 	AutoLoad bool   `yaml:"auto_load" json:"auto_load"`
+	// VerifyChecksum makes loading enforce the sha256 each manifest declares.
+	// It is off by default: switching it on refuses plugins that load fine
+	// today (most manifests declare no digest at all), and that is an operator's
+	// decision to make once their plugins carry digests, not a default change.
+	VerifyChecksum bool `yaml:"verify_checksum" json:"verify_checksum"`
 }
 
 type LoggingConfig struct {
@@ -159,6 +164,7 @@ func applyDefaults(c *Config) {
 	c.Data.DBFile = "loopworker_tasks.db"
 	c.Plugins.Dir = filepath.Join(home, "plugins")
 	c.Plugins.AutoLoad = true
+	c.Plugins.VerifyChecksum = false
 	c.Logging.Level = "info"
 	c.Logging.Format = "text"
 	c.Logging.Output = "stdout"

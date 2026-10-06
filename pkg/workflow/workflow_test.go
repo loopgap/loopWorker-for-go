@@ -485,6 +485,38 @@ func TestWorkflowIsComplete(t *testing.T) {
 	}
 }
 
+// GetStartedAt and GetCompletedAt exist so a poller can read the run's
+// timestamps without racing executeWorkflow. Both are nil until the run starts,
+// and CompletedAt must not precede StartedAt.
+func TestWorkflowTimestamps(t *testing.T) {
+	engine := NewWorkflowEngine()
+	wf := NewWorkflow("stamps", "Stamps")
+	wf.AddStep(&Step{ID: "only", Action: func(_ context.Context, state map[string]interface{}) (map[string]interface{}, error) {
+		if wf.GetCompletedAt() != nil {
+			t.Error("CompletedAt is set while the workflow is still running")
+		}
+		if wf.GetStartedAt() == nil {
+			t.Error("StartedAt is nil while the workflow is running")
+		}
+		return state, nil
+	}})
+	engine.Register(wf)
+
+	if wf.GetStartedAt() != nil || wf.GetCompletedAt() != nil {
+		t.Fatal("a workflow that has not run has no timestamps")
+	}
+	if err := engine.Execute(context.Background(), "stamps"); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	started, completed := wf.GetStartedAt(), wf.GetCompletedAt()
+	if started == nil || completed == nil {
+		t.Fatalf("a finished run has both timestamps, got started=%v completed=%v", started, completed)
+	}
+	if completed.Before(*started) {
+		t.Errorf("completed %v precedes started %v", completed, started)
+	}
+}
+
 func TestStepStatusUnknown(t *testing.T) {
 	s := StepStatus(99)
 	if s.String() != "unknown" {

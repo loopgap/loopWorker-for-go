@@ -26,11 +26,12 @@ type PluginInfo struct {
 	Skills      []string          `json:"skills,omitempty"` // skills this plugin requires
 	// Limits is the plugin's own resource request. build() resolves it against
 	// the sandbox's configuration before the runtime is created - see build.
-	//
-	// A "sha256" field in the manifest is intentionally absent: nothing verifies
-	// it on this path, and whether a mismatch rejects the plugin or only warns
-	// is a product decision, not one to fake with a parsed-but-unused field.
 	Limits sandbox.WasmLimits `json:"limits"`
+
+	// SHA256 is the digest the publisher claims for the entry artifact. It is
+	// only enforced when the manager was built with WithVerifyChecksum(true);
+	// otherwise it is parsed and unused, which used to be true always.
+	SHA256 string `json:"sha256"`
 
 	// Dir is the directory the plugin was loaded from. It is deliberately not
 	// part of the manifest: a directory name and a plugin name are independent
@@ -47,6 +48,7 @@ type PluginManager struct {
 	eventBus      *event.EventBus
 	skillRegistry *skill.SkillRegistry
 	pluginsDir    string
+	verifyDigest  bool
 	loaded        map[string]*PluginInfo
 	mu            sync.RWMutex
 }
@@ -58,6 +60,19 @@ type PluginManagerOption func(*PluginManager)
 func WithSkillRegistry(reg *skill.SkillRegistry) PluginManagerOption {
 	return func(pm *PluginManager) {
 		pm.skillRegistry = reg
+	}
+}
+
+// WithVerifyChecksum makes LoadPlugin refuse a plugin whose manifest digest does
+// not describe the artifact, and refuse one that declares no digest at all.
+//
+// It is off by default (plugins.verify_checksum) because turning it on stops
+// plugins that run today: most manifests in the wild carry no sha256. It is
+// per plugin, not per process - a refused plugin fails like any other bad
+// manifest, and the rest of the directory still loads.
+func WithVerifyChecksum(on bool) PluginManagerOption {
+	return func(pm *PluginManager) {
+		pm.verifyDigest = on
 	}
 }
 
@@ -170,6 +185,21 @@ func (pm *PluginManager) build(ctx context.Context, pluginDir string, info *Plug
 	wasm, err := os.ReadFile(path)
 	if err != nil {
 		return nil, "", fmt.Errorf("read %s: %w", entry, err)
+	}
+
+	// Before the module is compiled, not after: a mismatched artifact must
+	// never reach the runtime, and the refusal has to be an ordinary load
+	// failure so the per-plugin isolation in LoadAllPlugins/DiscoverAndLoad
+	// reports it and keeps the server up.
+	if pm.verifyDigest {
+		if err := sandbox.VerifyArtifactDigest(info.Name, info.SHA256, wasm, true); err != nil {
+			return nil, "", fmt.Errorf("plugin %q failed checksum verification: %w\n"+
+				"  cause: plugins.verify_checksum is on and %s does not match the digest %s declares\n"+
+				"  fix:   republish the artifact and the manifest together (sha256sum %s),\n"+
+				"         or set plugins.verify_checksum=false to load plugins without this check\n"+
+				"  docs:  docs/USAGE.md#wasm-plugins",
+				info.Name, err, entry, filepath.Join(pluginDir, "plugin.json"), entry)
+		}
 	}
 
 	// The manifest's limits are this plugin's own request, so they go through

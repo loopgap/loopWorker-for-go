@@ -591,6 +591,22 @@ func (w *Workflow) GetError() error {
 	return w.Error
 }
 
+// GetStartedAt and GetCompletedAt read the run's timestamps under the workflow
+// mutex, which is where executeWorkflow writes them. Both return nil before the
+// first execution. The pointees are never mutated - a new time.Time is published
+// by pointer on every write - so handing the pointer out is safe.
+func (w *Workflow) GetStartedAt() *time.Time {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.StartedAt
+}
+
+func (w *Workflow) GetCompletedAt() *time.Time {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.CompletedAt
+}
+
 type DAGWorkflow struct {
 	*Workflow
 	adjacency map[string][]string
@@ -782,16 +798,6 @@ func (pw *ParallelWorkflow) ExecuteParallel(ctx context.Context) error {
 	pw.mu.Unlock()
 
 	return nil
-}
-
-func (pw *ParallelWorkflow) checkDependencies(step *Step) bool {
-	for _, depID := range step.DependsOn {
-		status, exists := pw.StepStatus[depID]
-		if !exists || status != StepCompleted {
-			return false
-		}
-	}
-	return true
 }
 
 // publishWorkflowEvent publishes a workflow lifecycle event if eventBus is set.
