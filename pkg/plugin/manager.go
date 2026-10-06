@@ -197,7 +197,7 @@ func (pm *PluginManager) build(ctx context.Context, pluginDir string, info *Plug
 				"  cause: plugins.verify_checksum is on and %s does not match the digest %s declares\n"+
 				"  fix:   republish the artifact and the manifest together (sha256sum %s),\n"+
 				"         or set plugins.verify_checksum=false to load plugins without this check\n"+
-				"  docs:  docs/USAGE.md#wasm-plugins",
+				"  docs:  docs/USAGE.md#wasm-plugin",
 				info.Name, err, entry, filepath.Join(pluginDir, "plugin.json"), entry)
 		}
 	}

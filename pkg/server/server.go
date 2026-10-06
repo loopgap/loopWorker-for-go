@@ -123,7 +123,13 @@ func BuildComponents(cfg *config.Config) (*Components, error) {
 
 	c.SkillRegistry = newSkillRegistry(cfg)
 
-	pm, err := plugin.NewPluginManager(c.Sandbox, c.EventBus, cfg.Plugins.Dir, plugin.WithSkillRegistry(c.SkillRegistry))
+	pm, err := plugin.NewPluginManager(c.Sandbox, c.EventBus, cfg.Plugins.Dir,
+		plugin.WithSkillRegistry(c.SkillRegistry),
+		// The only line that makes plugins.verify_checksum a control rather than a
+		// config key nobody reads. Off by default: enabling it refuses manifests
+		// that declare no digest at all, which would reject plugins that load
+		// cleanly today.
+		plugin.WithVerifyChecksum(cfg.Plugins.VerifyChecksum))
 	if err != nil {
 		return nil, fmt.Errorf("create plugin manager for %s: %w", cfg.Plugins.Dir, err)
 	}

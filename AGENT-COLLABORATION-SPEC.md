@@ -224,6 +224,8 @@ ok  version
 26. **闸门工具自己坏了，而且坏了两次** —— 见 §8.1 第 7 条的返工史。此处补一条新的：**`covergate` 重写后的第一个真实运行就抓到了自己的设计缺陷** —— W 代理正在改 `pkg/server/workflows.go` 使树不可编译时，covergate 报了 **exit 2（harness error）而不是静默的 0%**。这正是「工具坏了」与「覆盖率回归了」需要不同退出码的价值。
 27. **spec 自己的杠杆清单会漏，而漏掉的那一条恰好最重要** —— 见 §11 的 D1~D5 裁决记录。SPEC v1.0 断言「MIT 已发布不可回撤 → 只能走 open-core」并把「现在加 CLA/DCO」列为窗口期动作；实测两条都不成立：**DCO 早在 `ci.yml:85` 就落地了**（`CONTRIBUTING.md:14` 明写不用 CLA），而「46 个提交尚未推送」这条杠杆的前提也站不住 —— 已推送的 `6cac897` 就已含 MIT LICENSE，「暂不推送」不改善法律状态、不改善 DCO 覆盖率，只是让你晚发一个已知更坏的版本。**结论：先定 D1 → 再推送 46 个提交 → 再打 `v0.1.0-beta`。** 顺序错的代价是第一条对外可见的记录里写着错误的法律主体。
 28. **一个只覆盖已跟踪文件的快照等于没有快照** —— 见 §8.4。
+29. **诊断工具给出与实测相反的结论，比不检查更贵** —— `pkg/server/diagnose.go` 的 security 检查连说两次「未鉴权请求照样被服务」，而实测两次都是 **401**（`security.auth_required=false` + 已配 `LOOPWORKER_API_KEYS`；以及 `security.enabled=false` + 无凭据），`/api/v1/health` 两种配置都报 `auth="required"`。根因两条：`internal/config/config.go:172` 把 `AuthRequired` 默认成 false，但 `pkg/api` 在配了任何凭据时就强制鉴权，该键**根本不控制执行**；`grep -rn 'Security\.Enabled' --include=*.go` 除 doctor 自己的文案与 `internal/config/spec.go` 的读写器外**零消费者**，即「被接受但从未生效」的键。两条文案已改成实测事实。**教训**：给操作员的每一句结论都必须是跑出来的，措辞推断在本仓库已第 5 次失效（另 4 处见 §8.1 前文），而这条的代价是让人去找一个该设置**根本造不出来**的漏洞。
+30. **配置校验器会拒绝文档亲手教的启动方式** —— 文档教「用 `LOOPWORKER_API_KEYS` 配多把密钥」，但 `internal/config.Validate()` 不认这个环境变量，于是文档给的第一条命令在启动时就失败，且报错指向凭据无效而非「你用了环境变量」。已让 `Validate()` 接受 `security.EnvAPIKeys`。**教训**：文档与校验器是同一份契约的两端，只改一端等于把契约撕成两半。
 
 ### 8.4 事故与恢复：一次工作树删除事件
 

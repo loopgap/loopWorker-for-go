@@ -20,6 +20,11 @@ server:
 plugins:
   dir: "~/.loopworker/plugins"
   auto_load: true
+  # Verify each wasm artifact's sha256 against the digest its plugin.json declares.
+  # Default false on purpose: a manifest that declares no digest at all is also a
+  # failure here, and every plugin written before the field existed declares none.
+  # Turn it on once your manifests carry digests, and republish artifact + manifest together.
+  verify_checksum: false
 
 # Data settings
 data:

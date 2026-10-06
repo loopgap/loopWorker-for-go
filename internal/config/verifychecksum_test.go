@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -39,5 +40,13 @@ func TestVerifyChecksumIsOffByDefaultAndConfigurable(t *testing.T) {
 	write(t, path, "plugins:\n  verify_checksum: maybe\n")
 	if _, err := Load(Options{ConfigFile: path}); err == nil {
 		t.Error("a non-boolean verify_checksum must be rejected instead of ignored")
+	}
+
+	// The shape error has to name the right type, or the operator is told to fix
+	// a key that was never wrong.
+	write(t, path, "plugins:\n  verify_checksum: [yes, no]\n")
+	_, err = Load(Options{ConfigFile: path})
+	if err == nil || !strings.Contains(err.Error(), "true or false") {
+		t.Errorf("a list must be reported as a boolean key, got: %v", err)
 	}
 }

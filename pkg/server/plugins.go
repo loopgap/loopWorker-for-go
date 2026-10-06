@@ -37,6 +37,11 @@ type PluginRun struct {
 	Failed     []PluginFailure `json:"failed,omitempty"`
 	Renamed    []PluginRename  `json:"renamed,omitempty"`
 	AutoLoad   bool            `json:"auto_load"`
+	// VerifyChecksum is plugins.verify_checksum as actually applied to this
+	// process. Reported so that turning the switch on leaves a startup line
+	// saying it is on - a control that announces nothing is indistinguishable
+	// from a config key nobody reads.
+	VerifyChecksum bool `json:"verify_checksum"`
 }
 
 // DiscoverAndLoad scans the configured plugin directory and loads every plugin
@@ -45,7 +50,11 @@ type PluginRun struct {
 // still load, because a broken plugin is an operator problem with one directory
 // rather than a reason to refuse to serve.
 func DiscoverAndLoad(ctx context.Context, pm *plugin.PluginManager, cfg *config.Config) (*PluginRun, error) {
-	run := &PluginRun{Dir: cfg.Plugins.Dir, AutoLoad: cfg.Plugins.AutoLoad}
+	run := &PluginRun{
+		Dir:            cfg.Plugins.Dir,
+		AutoLoad:       cfg.Plugins.AutoLoad,
+		VerifyChecksum: cfg.Plugins.VerifyChecksum,
+	}
 
 	dirs, err := pm.DiscoverPlugins()
 	if err != nil {
@@ -130,6 +139,11 @@ func (r *PluginRun) Summary() string {
 		// the log to explain it.
 		for _, rn := range r.Renamed {
 			summary += fmt.Sprintf(" (directory %q provides plugin %q - use the plugin name in tasks)", rn.DirName, rn.Name)
+		}
+		if r.VerifyChecksum {
+			summary += " (verify_checksum on: each artifact was checked against the sha256 in its manifest)"
+		} else {
+			summary += " (verify_checksum off: manifests are not checked against the artifacts)"
 		}
 		return summary
 	}

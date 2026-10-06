@@ -49,14 +49,18 @@ The configured caps are a ceiling, not a floor. A plugin's `plugin.json` may dec
 
 A manifest cannot widen the host's `allowed_hosts` either — the effective egress list is the
 intersection. Because the ceiling is shared, a plugin that allocates all 256 MB still affects
-every other plugin in that sandbox. Manifest **checksums are not verified** at load time.
+every other plugin in that sandbox. Manifest checksums **are verified** at load time when
+`plugins.verify_checksum: true` is set: the artifact's sha256 is compared against the digest
+its `plugin.json` declares, and a mismatch refuses that one plugin while the server keeps running.
+The default is off, because turning it on also refuses manifests that declare no digest at all —
+which is every plugin written before the field existed.
 
 Not in this release — scaffolding exists, but nothing calls it in a running server:
 
 | Not shipped | Where the code is | Why it is not a feature |
 |---|---|---|
 | Signed WASM plugin provenance | `internal/core/sandbox/verify.go` `AuditWasmFile` | the auditor exists and is tested, but nothing calls it in a running server, so no manifest checksum or ABI gate is enforced at load time |
-| Plugin checksum verification | `sandbox/loader.go checkChecksums` | only the test path reads manifests |
+| Plugin digest pinning | `sandbox/loader.go checkChecksums` | `verify_checksum` compares an artifact against the digest its own manifest declares; there is no allowlist of approved digests, so a manifest that lies consistently passes |
 | Distributed tracing | `internal/core/observer` | in-memory span slice, no exporter |
 | Audit logging | `pkg/security.SecurityManager` | never constructed outside tests |
 
@@ -304,7 +308,7 @@ manifest 同样不能扩大宿主配置的 `allowed_hosts` —— 实际出网�
 | 未交付 | 代码位置 | 原因 |
 |---|---|---|
 | WASM 产物签名溯源 | `internal/core/sandbox/verify.go` 的 `AuditWasmFile` | 审计器存在且有测试，但运行中的服务器没有任何调用方，所以加载时不强制 manifest 校验和与 ABI 闸门 |
-| 插件校验和验证 | `sandbox/loader.go checkChecksums` | 只有测试路径读 manifest |
+| 插件摘要固定 | `sandbox/loader.go checkChecksums` | `verify_checksum` 只把产物和它自己 manifest 声明的摘要比对，没有可信摘要白名单，所以一份「一致地说谎」的 manifest 仍能通过 |
 | 分布式追踪 | `internal/core/observer` | 只写内存切片，无 exporter |
 | 审计日志 | `pkg/security.SecurityManager` | 除测试外从未构造 |
 
