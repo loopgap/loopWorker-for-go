@@ -106,29 +106,49 @@ Pre-1.0 beta. The version scheme is `0.1.0-beta` for the first public beta and
 compatibility promise: the HTTP API, config schema, and plugin ABI are all still
 moving. See `.release/RELEASE-PROCESS.md`.
 
-Planned contents (the section exists so `preflight` can find it once the tag is
-cut; no artifacts for 0.1.0-beta exist as of 2026-10-05):
+Contents (no artifacts for 0.1.0-beta exist as of 2026-10-06 — the section
+exists so `preflight` can find it once the tag is cut):
 
 * Event-driven task engine (`pkg/event`) with backpressure and metrics.
-* Priority scheduling (`internal/core/scheduler`) and task dependencies
-  (`internal/core/dispatcher`).
-* WASM plugin sandbox (`internal/core/sandbox`, wazero) with memory/CPU/output
-  limits — resource caps, not a security boundary (SECURITY.md).
-* Self-healing (`internal/core/selfheal`) with circuit breaker + backoff.
-* Workflow patterns: sequential, DAG, parallel (`pkg/workflow`).
-* HTTP API (`pkg/api`, chi) at `/api/v1/*` plus `/metrics`; `pkg/client` SDK.
+* Priority scheduling (`internal/core/scheduler`) with retry budgets and a
+  dead-letter state, plus task dependencies (`internal/core/dispatcher`).
+* WASM plugin sandbox (`internal/core/sandbox`, wazero) — a plugin runs in its
+  own runtime, and memory/CPU/output limits come from config. Resource caps,
+  not a security boundary (SECURITY.md).
+* Self-healing (`internal/core/selfheal`): circuit breaker, exponential backoff,
+  and health checks on a timer against the task database, the event store and
+  the plugin directory.
+* Workflow engine (`pkg/workflow`): sequential and DAG steps, two built-in
+  workflows that run with no configuration, loadable definitions from
+  JSON/YAML. Parallel step execution is **not** in this release.
+* HTTP API (`pkg/api`, chi) at `/api/v1/*`, authentication by API key and bearer
+  token, three-level RBAC, per-caller rate limiting and per-task ownership; a
+  loopback-only admin listener for `/metrics` and `/runtime/stats`; `pkg/client`
+  SDK.
+* `loopworker doctor` self-diagnosis, plus `loopworker backup` and
+  `loopworker storage`.
 * `loopworker` server binary; static artifacts for linux/darwin/windows and
-  deb/rpm; container image; SBOM + signatures; Homebrew formula.
+  deb/rpm; container image; SBOM + signatures.
 * Structured logging (`pkg/logger`) and sentinel errors (`pkg/errors`).
-* Unit tests in 31 packages plus `integration/integration_test.go`.
+* 22 test packages plus `integration/integration_test.go`; `-race` clean;
+  total coverage 80.3%.
 
 ### Known issues at 0.1.0-beta (do not pretend otherwise)
 
-* `pkg/server` has a verified data race under `-race`; the CI gate is red until
-  it is fixed — that is intentional.
-* Authentication is implemented in `pkg/security` and enforced by `pkg/api`
-  middleware, but `pkg/server` does not wire it up yet — a bare server accepts
-  unauthenticated writes. Do not expose it to an untrusted network.
-* There is no TLS termination; put the server behind a reverse proxy that does it
-  (see SECURITY.md "What LoopWorker does NOT do").
-* SQLite data growth has no retention/compaction policy.
+* **The copyright line in `LICENSE` is an unresolved placeholder.** The release
+  pipeline refuses to publish until a legal entity is named there. This is the
+  only thing standing between this tree and a release.
+* Sandbox limits are **per sandbox, not per plugin** (`loader.go` implements
+  per-plugin manifest limits; the plugin loader does not read them yet). One
+  plugin exhausting the cap affects every plugin in that sandbox.
+* Plugin manifests are not checksum-verified at load time. The verifier
+  (`internal/core/sandbox/verify.go`) exists and is tested; nothing calls it in
+  a running server.
+* No TLS termination; put the server behind a reverse proxy that does it (see
+  SECURITY.md, "What LoopWorker does NOT do").
+* No audit log and no distributed tracing. Both have library-level scaffolding
+  with no production caller.
+* Task ownership is enforced in the API layer from task metadata rather than a
+  first-class column, so code with write access can forge an owner value.
+* 4 of the 6 CLIs are developer-only: they are not built into any release
+  artifact, and `loopbench` / `loopsim` do not contact a server at all.
