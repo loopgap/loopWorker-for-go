@@ -234,10 +234,10 @@ func checkAdminPort(port int) error {
 }
 
 func (d *Diagnostics) checkSandbox(cfg *config.Config) Check {
-	// "per sandbox", not "per plugin": the caps come from config and the plugin
-	// loader does not apply per-plugin manifest limits, so a plugin that
-	// allocates all of it makes the next one fail for the same reason.
-	detail := fmt.Sprintf("limits: %d MB memory, %d CPU seconds, %d MB output, %d concurrent - shared by every plugin in this sandbox",
+	// These are the ceiling. A plugin manifest may tighten any of them, and the
+	// effective value is the smaller of the two; a manifest can never raise them.
+	// So a plugin allocating all of it still affects the next one in this sandbox.
+	detail := fmt.Sprintf("limits: %d MB memory, %d CPU seconds, %d MB output, %d concurrent - the ceiling for this sandbox; a plugin manifest may tighten them but never raise them",
 		cfg.Sandbox.MaxMemoryMB, cfg.Sandbox.MaxCPUSeconds, cfg.Sandbox.MaxOutputMB, cfg.Sandbox.MaxConcurrent)
 	if len(cfg.Sandbox.AllowedHosts) == 0 {
 		return Check{Name: "sandbox", Status: StatusWarn,

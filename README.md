@@ -15,9 +15,9 @@ like any other task.
 
 - **WASM plugin isolation** - every plugin gets its own wazero runtime, so a plugin cannot
   corrupt another's memory. Memory, CPU-second, output-size and concurrency caps, plus an
-  `allowed_hosts` egress list, come from config and are **shared across the sandbox, not per
-  plugin** — see [Limits are sandbox-wide](#limits-are-sandbox-wide) before you rely on one
-  misbehaving plugin leaving the others alone.
+  `allowed_hosts` egress list, are set in config and act as the **ceiling**; a plugin's
+  `plugin.json` may tighten any of them but can never raise them — see
+  [Limits](#limits).
 - **Priority scheduling** - 4-level queue (Low/Normal/High/Critical) with retry budgets and a
   dead-letter state for tasks that exhaust them
 - **Task dependencies** - DAG with cycle detection at the API boundary
@@ -34,12 +34,22 @@ like any other task.
 - **Self-diagnosis** - `loopworker doctor` checks directories, database, port, plugins,
   authentication and sandbox policy, and names the cause, the fix and a docs anchor for each
 
-#### Limits are sandbox-wide
+#### Limits
 
-Every plugin shares the configured caps: a plugin that allocates all 256 MB makes the next plugin
-fail for the same reason. Per-plugin manifest limits are implemented in `internal/core/sandbox`
-but the plugin loader does not read them yet, so they are not a feature of this release. Loading
-them is the first item on the enterprise split.
+The configured caps are a ceiling, not a floor. A plugin's `plugin.json` may declare its own
+`limits` and the effective limit is the **smaller** of the two:
+
+```json
+{
+  "name": "my-plugin",
+  "entry": "my-plugin.wasm",
+  "limits": { "max_output_mb": 4, "allowed_hosts": ["api.example.com"] }
+}
+```
+
+A manifest cannot widen the host's `allowed_hosts` either — the effective egress list is the
+intersection. Because the ceiling is shared, a plugin that allocates all 256 MB still affects
+every other plugin in that sandbox. Manifest **checksums are not verified** at load time.
 
 Not in this release — scaffolding exists, but nothing calls it in a running server:
 
@@ -259,8 +269,8 @@ MIT
 ### 实际具备的能力
 
 - **WASM 插件隔离** - 每个插件一个 wazero runtime；内存 / `max_cpu_seconds` / 输出上限 / 并发上限
-  以及出网 `allowed_hosts` 白名单，全部可配。限额是**沙箱级而非插件级**，见
-  [限额是沙箱级的](#限额是沙箱级的)
+  以及出网 `allowed_hosts` 白名单，全部可配，是**上限**；插件 manifest 可以收紧但不能放宽，见
+  [限额](#限额)
 - **优先级调度** - 四级队列（低/普通/高/关键），带重试预算；重试耗尽的任务进入 dead-letter 状态
 - **任务依赖** - DAG，环检测在 API 边界完成
 - **自愈机制** - 熔断器、指数退避，以及按定时器对任务数据库、事件存储与插件目录的健康检查；失败的检查会带原因在 `/healthz` 里点名
@@ -272,11 +282,22 @@ MIT
 - **自诊断** - `loopworker doctor` 检查目录、数据库、端口、插件、鉴权与沙箱策略，
   每一项都给出原因、修法与文档锚点
 
-#### 限额是沙箱级的
+#### 限额
 
-所有插件共用同一组限额：一个插件吃满 256 MB，下一个插件也会因同样的原因失败。
-按 manifest 配置的每插件限额已在 `internal/core/sandbox` 中实现，但插件加载器尚未读取它们，
-因此不属于本版本能力。加载 manifest 限额是企业版拆分的第一项。
+配置里的限额是**上限**，不是下限。插件的 `plugin.json` 可以声明自己的 `limits`，
+实际生效的是两者中**更小的那个**：
+
+```json
+{
+  "name": "my-plugin",
+  "entry": "my-plugin.wasm",
+  "limits": { "max_output_mb": 4, "allowed_hosts": ["api.example.com"] }
+}
+```
+
+manifest 同样不能扩大宿主配置的 `allowed_hosts` —— 实际出网名单是两者的**交集**。
+因为上限是共享的，一个插件吃满 256 MB 仍会影响同一沙箱内的其他插件。
+**manifest 的校验和在加载时不做验证。**
 
 本版本**不含**以下能力——代码存在，但运行中的服务里没有任何地方调用：
 

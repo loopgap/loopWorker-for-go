@@ -1,6 +1,11 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"loopworker/pkg/security"
+)
 
 // TestAdminPortIsConfigurableFromFileAndEnv guards a real gap found by running
 // the shipped binary: the admin listener's port was a compile-time constant, so
@@ -57,5 +62,27 @@ func TestDefaultListenerIsLoopback(t *testing.T) {
 	if cfg.Server.Host != "127.0.0.1" {
 		t.Errorf("default listener = %q, want 127.0.0.1: a public default cannot start "+
 			"without credentials, so the out-of-box run would refuse to boot", cfg.Server.Host)
+	}
+}
+
+// TestAuthRequiredAcceptsEnvironmentCredentials guards a documented path that
+// did not work. README and QUICKSTART tell an operator to set auth_required: true
+// and supply the key through LOOPWORKER_API_KEYS; the validator only looked at
+// security.api_key in the config file, so exactly that combination refused to
+// start and the error named a setting the operator had deliberately not used.
+func TestAuthRequiredAcceptsEnvironmentCredentials(t *testing.T) {
+	t.Setenv(security.EnvAPIKeys, "tester:admin:"+strings.Repeat("a", 64))
+
+	cfg := Defaults()
+	cfg.Security.AuthRequired = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("env-only credentials must satisfy auth_required: %v", err)
+	}
+
+	// And the negative case must still fire, or the check above proves nothing.
+	t.Setenv(security.EnvAPIKeys, "")
+	cfg.Security.APIKey = ""
+	if err := cfg.Validate(); err == nil {
+		t.Error("auth_required with no credential anywhere must be rejected")
 	}
 }

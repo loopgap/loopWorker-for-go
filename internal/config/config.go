@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"loopworker/pkg/security"
 )
 
 // Config is the complete resolved configuration of a LoopWorker server.
@@ -271,10 +273,17 @@ func (c *Config) addChecks(add func(string, ...interface{})) {
 	if !oneOf(c.Logging.Output, "stdout", "stderr") {
 		check("logging.output", "must be one of: %s, got %q", AcceptedLogOutputs, c.Logging.Output)
 	}
-	if c.Security.AuthRequired && strings.TrimSpace(c.Security.APIKey) == "" {
-		check("security.api_key", "must be set when security.auth_required is true")
+	// A credential can arrive two ways: security.api_key in the config file, or
+	// LOOPWORKER_API_KEYS in the environment (pkg/server reads both). Validating
+	// only the first made the documented combination - auth_required: true plus
+	// LOOPWORKER_API_KEYS - fail to start, so an operator following README or
+	// QUICKSTART was told to set a config key they did not need.
+	envKey := strings.TrimSpace(os.Getenv(security.EnvAPIKeys))
+	hasCredential := strings.TrimSpace(c.Security.APIKey) != "" || envKey != ""
+	if c.Security.AuthRequired && !hasCredential {
+		check("security.api_key", "must be set when security.auth_required is true; set it in the config file or export %s", security.EnvAPIKeys)
 	}
-	if c.Security.Enabled && c.Security.AuthRequired && len(c.Security.APIKey) < 16 {
+	if c.Security.Enabled && c.Security.AuthRequired && strings.TrimSpace(c.Security.APIKey) != "" && len(c.Security.APIKey) < 16 {
 		check("security.api_key", "must be at least 16 characters when auth is required, got %d", len(c.Security.APIKey))
 	}
 	if c.Sandbox.MaxMemoryMB < 1 {

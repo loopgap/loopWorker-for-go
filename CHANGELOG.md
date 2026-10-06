@@ -138,9 +138,10 @@ exists so `preflight` can find it once the tag is cut):
 * **The copyright line in `LICENSE` is an unresolved placeholder.** The release
   pipeline refuses to publish until a legal entity is named there. This is the
   only thing standing between this tree and a release.
-* Sandbox limits are **per sandbox, not per plugin** (`loader.go` implements
-  per-plugin manifest limits; the plugin loader does not read them yet). One
-  plugin exhausting the cap affects every plugin in that sandbox.
+* Sandbox limits are a **ceiling**: a plugin's `plugin.json` may tighten them
+  but never raise them, and `allowed_hosts` is intersected rather than
+  replaced. One plugin exhausting the cap still affects every plugin in that
+  sandbox.
 * Plugin manifests are not checksum-verified at load time. The verifier
   (`internal/core/sandbox/verify.go`) exists and is tested; nothing calls it in
   a running server.
