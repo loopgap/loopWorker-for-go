@@ -1,315 +1,72 @@
-# LoopWorker 深度测试验证报告
+# 测试验证 / Test verification
 
-## 测试概览
+> **这份文档不复制数字。** 上一个版本在这里逐包列出测试数与覆盖率，写的是一棵
+> 不存在的树（`pkg/dashboard`、`pkg/dispatcher`、`pkg/executor` —— 真实路径在
+> `internal/core/` 下），声称 194 个测试、16 个包；实测是 **855 个测试、22 个包**。
+> 一个会过期的事实性报告，改代码之后只会变成谎言。
+>
+> **This document does not duplicate numbers.** The previous version listed
+> per-package test counts for a tree that does not exist, claiming 194 tests
+> across 16 packages. Reality is 855 tests across 22. A factual snapshot goes
+> stale the moment code changes; the commands below are the source of truth.
 
-| 指标 | 数值 |
-|------|------|
-| 总测试数 | 194 |
-| 通过测试 | 194 |
-| 失败测试 | 0 |
-| 通过率 | 100% |
-| 测试包数 | 16 |
-| 构建工具 | 6 |
+## 当前状态 / Current state (2026-10-06)
 
-## 测试详情
+| 指标 | 值 | 复现命令 |
+|---|---|---|
+| 测试函数 | **855** | `go test ./... -list '.*' \| grep -c '^Test'` |
+| 有测试的包 | **22** | `go test ./... \| grep -c '^ok'` |
+| 全部通过 | ✅ | `go test ./... -count=1` |
+| 竞态 | **0 DATA RACE** | `go test -race -count=1 ./...` |
+| 语句覆盖率 | **80.3%** | `go tool cover -func`（阈值 80） |
+| 发布包覆盖率下限 | 每包 ≥60% | `covergate -pkg ./cmd/loopworker,./cmd/loopctl -pkg-min 60` |
+| 已知可达漏洞 | **0** | `govulncheck ./...` |
 
-### 1. cmd/loopworker (2 tests)
-- TestDefaultConfig ✓
-- TestConfigJSON ✓
+## 逐包测试数 / Tests per package
 
-### 2. integration (7 tests)
-- TestFullPlatformIntegration ✓
-- TestSecurityIntegration ✓
-- TestWorkflowIntegration ✓
-- TestLifecycleIntegration ✓
-- TestSelfHealIntegration ✓
-- TestConcurrentTaskExecution ✓
-- TestCircuitBreakerIntegration ✓
+```
+for p in $(go list ./...); do n=$(go test "$p" -list '.*' 2>/dev/null | grep -c '^Test'); \
+  [ "$n" -gt 0 ] && printf "%-42s %s\n" "$p" "$n"; done | sort -k2 -rn
+```
 
-### 3. internal/config (10 tests)
-- TestDefaultConfig ✓
-- TestConfigJSON ✓
-- TestValidateValidConfig ✓
-- TestValidateInvalidPort ✓
-- TestValidateInvalidLogLevel ✓
-- TestValidateInvalidSandbox ✓
-- TestValidateInvalidWorkers ✓
-- TestLoadConfigFromFile ✓
-- TestLoadConfigDefault ✓
-- TestEnvironmentOverrides ✓
-- TestSaveConfig ✓
+最大的几处（2026-10-06 实测）：
 
-### 4. pkg/api (11 tests)
-- TestNewAPIServer ✓
-- TestRegisterEndpoint ✓
-- TestNotFound ✓
-- TestMiddleware ✓
-- TestCORMiddleware ✓
-- TestLoggingMiddleware ✓
-- TestHealthCheck ✓
-- TestHealthCheckUnhealthy ✓
-- TestAuthMiddleware ✓
-- TestAuthMiddlewareUnauthorized ✓
-- TestTaskAPI ✓
+| 包 | 测试数 |
+|---|---|
+| `pkg/api` | 178 |
+| `internal/core/scheduler` | 90 |
+| `internal/core/sandbox` | 66 |
+| `internal/core/executor` | 51 |
+| `pkg/server` | 50 |
+| `pkg/security` | 49 |
+| `internal/core/selfheal` | 48 |
+| `pkg/event` | 46 |
+| `pkg/workflow` | 39 |
 
-### 5. pkg/dashboard (7 tests)
-- TestNewDashboard ✓
-- TestHandleIndex ✓
-- TestHandleTasks ✓
-- TestHandleMetrics ✓
-- TestHandleLogs ✓
-- TestHandleHealth ✓
-- TestHandleStats ✓
+**没有测试文件的包**：`cmd/{loopbench,loopdebug,loopsim,loopwatch}`、
+`examples/{hello-plugin,simple,workflow}`。前四个是开发者工具，不进入任何发布
+产物（见 `.release/SCOPE-PROPOSAL.md`）。
 
-### 6. pkg/dispatcher (11 tests)
-- TestRegisterWorker ✓
-- TestRegisterDuplicateWorker ✓
-- TestUnregisterWorker ✓
-- TestUnregisterNonexistentWorker ✓
-- TestDispatch ✓
-- TestDispatchNoTasks ✓
-- TestDispatchNoWorkers ✓
-- TestCompleteTask ✓
-- TestFailTask ✓
-- TestListWorkers ✓
-- TestAvailableWorkerCount ✓
-- TestDispatcherEventPublishing ✓
+## 复现全部闸门 / Reproduce every gate
 
-### 7. pkg/event (15 tests)
-- TestNewEvent ✓
-- TestEventBusPublishSubscribe ✓
-- TestEventBusSyncSubscriber ✓
-- TestEventBusUnsubscribe ✓
-- TestEventBusDoubleUnsubscribe ✓
-- TestEventBusGetStats ✓
-- TestEventBusBackpressure ✓
-- TestLocalEventStoreAppendAndLoad ✓
-- TestLocalEventStoreFilterByType ✓
-- TestLocalEventStoreFilterByTime ✓
-- TestLocalEventStoreSnapshot ✓
-- TestLocalEventStoreReplay ✓
-- TestEventBusWithStore ✓
-- TestLocalEventStorePersistence ✓
-- TestEventFilterLimit ✓
+```bash
+make fmt-check          # gofmt -l 必须为空
+make vet                # go vet ./...
+make build              # go build ./cmd/... ./pkg/... ./internal/... ./version/...
+make test               # 全树单测
+make test-race          # -race
+make cover              # 覆盖率 profile + go tool cover -func
+make coverage-gate      # 总量 80% + 发布包每包 60%
+make boot-smoke         # 6 道真实二进制闸门
+```
 
-### 8. pkg/executor (9 tests)
-- TestStartWorker ✓
-- TestStartDuplicateWorker ✓
-- TestStopWorker ✓
-- TestStopNonexistentWorker ✓
-- TestStopAllWorkers ✓
-- TestExecuteTask ✓
-- TestExecuteTaskFailure ✓
-- TestListWorkers ✓
-- TestWorkerState ✓
+`make boot-smoke` 是**唯一**会真正起服务、建任务、跑 WASM 插件、洪泛限流、
+再发 SIGTERM 的检查。单元测试证明不了「这个产品能用」。
 
-### 9. pkg/lifecycle (14 tests)
-- TestNewLifecycleManager ✓
-- TestRegisterService ✓
-- TestStartAll ✓
-- TestStopAll ✓
-- TestStartFailure ✓
-- TestStopFailure ✓
-- TestRestart ✓
-- TestHealthCheck ✓
-- TestHealthCheckFailure ✓
-- TestGetAllStates ✓
-- TestServiceGroup ✓
-- TestServiceStateString ✓
-- TestStartAlreadyRunning ✓
-- TestConcurrentAccess ✓
+## 计时注意事项 / Timing notes
 
-### 10. pkg/observer (11 tests)
-- TestRecordMetric ✓
-- TestRecordMetricWithLabels ✓
-- TestMetricFamilies ✓
-- TestHistogram ✓
-- TestStartTrace ✓
-- TestEndTrace ✓
-- TestLog ✓
-- TestGetHealth ✓
-- TestExportJSON ✓
-- TestObserverHandlesEvents ✓
-- TestReset ✓
-
-### 11. pkg/plugin (7 tests)
-- TestPluginManagerLoadPlugin ✓
-- TestPluginManagerLoadDuplicate ✓
-- TestPluginManagerUnloadPlugin ✓
-- TestPluginManagerUnloadNonexistent ✓
-- TestPluginManagerGetPlugin ✓
-- TestPluginManagerDiscoverPlugins ✓
-- TestPluginManagerLoadAllPlugins ✓
-
-### 12. pkg/sandbox (11 tests)
-- TestSandboxLoadPlugin ✓
-- TestSandboxLoadDuplicatePlugin ✓
-- TestSandboxUnloadPlugin ✓
-- TestSandboxUnloadNonexistentPlugin ✓
-- TestSandboxExecute ✓
-- TestSandboxExecuteNonexistentPlugin ✓
-- TestSandboxExecuteTimeout ✓
-- TestSandboxExecuteOutputLimit ✓
-- TestSandboxConcurrentAccess ✓
-- TestSandboxGetStats ✓
-- TestSandboxMaxConcurrent ✓
-
-### 13. pkg/scheduler (18 tests)
-- TestCreateTask ✓
-- TestCreateTaskWithPriority ✓
-- TestQueueTask ✓
-- TestQueueTaskPriorityOrder ✓
-- TestAddDependency ✓
-- TestQueueTaskWithDependency ✓
-- TestStartTask ✓
-- TestCompleteTask ✓
-- TestFailTask ✓
-- TestFailTaskMaxRetry ✓
-- TestCancelTask ✓
-- TestDequeueTask ✓
-- TestDequeueEmptyQueue ✓
-- TestListTasks ✓
-- TestListTasksByPriority ✓
-- TestGetTask ✓
-- TestGetStats ✓
-- TestTaskEventPublishing ✓
-
-### 14. pkg/security (20 tests)
-- TestCreateUser ✓
-- TestCreateDuplicateUser ✓
-- TestAuthenticate ✓
-- TestAuthenticateInvalidUser ✓
-- TestValidateToken ✓
-- TestValidateInvalidToken ✓
-- TestAuthorize ✓
-- TestRevokeToken ✓
-- TestAuditLog ✓
-- TestPasswordHash ✓
-- TestRateLimiterAllow ✓
-- TestRateLimiterDifferentIPs ✓
-- TestRateLimiterReset ✓
-- TestRateLimiterConcurrent ✓
-- TestInputValidator ✓
-- TestInputValidatorCustomRule ✓
-- TestAccountLocker ✓
-- TestAccountLockerSuccess ✓
-- TestAccountLockerReset ✓
-- TestAccountLockerLockoutExpiry ✓
-- TestSecurityConfigDefaults ✓
-
-### 15. pkg/selfheal (12 tests)
-- TestNewSelfHealer ✓
-- TestExecuteWithRecoverySuccess ✓
-- TestExecuteWithRecoveryRetrySuccess ✓
-- TestExecuteWithRecoveryExhausted ✓
-- TestCircuitBreakerOpen ✓
-- TestCircuitBreakerRecovery ✓
-- TestCircuitBreakerReset ✓
-- TestHealthCheck ✓
-- TestIncidentRecording ✓
-- TestRecoveryLog ✓
-- TestHealthStatusDegraded ✓
-- TestSeverityString ✓
-- TestRecoveryActionString ✓
-
-### 16. pkg/tui (12 tests)
-- TestNewModel ✓
-- TestModelInit ✓
-- TestModelUpdateWindowSize ✓
-- TestModelUpdateTab ✓
-- TestModelUpdateNumberKeys ✓
-- TestModelView ✓
-- TestModelViewNotReady ✓
-- TestRefresh ✓
-- TestAllViews ✓
-- TestTruncate ✓
-- TestRenderDashboardView ✓
-- TestRenderTasksView ✓
-- TestRenderWorkersView ✓
-- TestRenderMetricsView ✓
-- TestRenderLogsView ✓
-- TestEmptyStates ✓
-
-### 17. pkg/workflow (12 tests)
-- TestNewWorkflow ✓
-- TestAddStep ✓
-- TestWorkflowEngineExecute ✓
-- TestWorkflowWithDependencies ✓
-- TestWorkflowWithRetry ✓
-- TestWorkflowStepFailure ✓
-- TestWorkflowCondition ✓
-- TestWorkflowState ✓
-- TestWorkflowCancellation ✓
-- TestDAGWorkflow ✓
-- TestDAGCycleDetection ✓
-- TestParallelWorkflow ✓
-- TestGetWorkflow ✓
-- TestListWorkflows ✓
-- TestStepStatus ✓
-
-### 18. test/e2e (1 test)
-- TestCompleteWorkflow ✓
-
-## 构建验证
-
-| CLI工具 | 状态 |
-|---------|------|
-| loopworker | ✓ |
-| loopctl | ✓ |
-| loopbench | ✓ |
-| loopwatch | ✓ |
-| loopsim | ✓ |
-| loopdebug | ✓ |
-
-## 静态分析
-
-| 检查项 | 状态 |
-|--------|------|
-| go vet | ✓ 通过 |
-
-## 动态调用验证
-
-### 事件系统
-- EventBus.Publish → 订阅者接收 ✓
-- EventBus.Subscribe/Unsubscribe ✓
-- EventBus.Backpressure ✓
-
-### 调度器
-- Scheduler.CreateTask → 任务创建 ✓
-- Scheduler.QueueTask → 任务排队 ✓
-- Scheduler.StartTask → 任务启动 ✓
-- Scheduler.CompleteTask → 任务完成 ✓
-- Scheduler.FailTask → 任务失败 + 重试 ✓
-- Scheduler.CancelTask → 任务取消 ✓
-
-### 执行器
-- Executor.StartWorker → Worker启动 ✓
-- Executor.StopWorker → Worker停止 ✓
-- Executor.workerLoop → 任务执行 ✓
-- Executor.executeTask → 插件调用 ✓
-
-### 沙箱
-- Sandbox.LoadPlugin → 插件加载 ✓
-- Sandbox.Execute → 插件执行 ✓
-- Sandbox.ResourceLimits → 资源限制 ✓
-
-### 安全
-- SecurityManager.CreateUser → 用户创建 ✓
-- SecurityManager.Authenticate → 认证 ✓
-- SecurityManager.Authorize → 授权 ✓
-- RateLimiter.Allow → 速率限制 ✓
-- AccountLocker → 账户锁定 ✓
-
-### 自愈
-- SelfHeal.ExecuteWithRecovery → 恢复执行 ✓
-- CircuitBreaker → 熔断器 ✓
-- HealthCheck → 健康检查 ✓
-
-### 工作流
-- WorkflowEngine.Execute → 工作流执行 ✓
-- DAG依赖 → 拓扑排序 ✓
-- ParallelWorkflow → 并行执行 ✓
-
-## 结论
-
-**所有194个测试通过，6个CLI工具构建成功，平台功能完整验证。**
+- `pkg/plugin` 单次约 50 秒，**`-race` 下约 9 分钟**：每个夹具都真的把一个
+  2.5 MB 的 Go→wasm 模块编译一次（约 110 次）。这不是挂起，是设计使然。
+  `go test` 的默认 10 分钟超时会在 `-race` 下被打到，需要 `-timeout 3600s`。
+- 全树 `-race` 约 40 分钟。
+- `pkg/security` `-race` 约 3 分钟。

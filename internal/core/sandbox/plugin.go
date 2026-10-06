@@ -170,6 +170,10 @@ func (s *Sandbox) NewWasmPluginWithLimits(ctx context.Context, name, version str
 // resolveWasmLimits overlays a plugin's declared limits on the sandbox's
 // configuration. It is the single place where the two are combined, so every
 // entry point gets the same answer.
+//
+// This is the lenient path: a manifest that asks for more than the sandbox
+// allows is clamped down to the ceiling. loader.go's resolveLimits is the strict
+// one and refuses instead. Both are intentional; see the comment there.
 func (s *Sandbox) resolveWasmLimits(limits WasmLimits) WasmLimits {
 	return WasmLimits{
 		MemoryMB:      clampToCeiling(limits.MemoryMB, s.config.MaxMemoryMB),

@@ -282,6 +282,13 @@ func checkChecksums(manifest *WasmManifest, data []byte, opts LoadOptions) error
 }
 
 // resolveLimits overlays manifest limits on the loader defaults.
+//
+// This path is deliberately the strict one and does NOT clamp, the way the
+// runtime's resolveWasmLimits does: verifyWasmDir refuses a manifest that asks
+// for more memory than LoadOptions.MaxMemoryMB, so an over-limit plugin fails to
+// load loudly instead of being silently reduced. Keep the two apart
+// deliberately - and if one is ever taught to clamp, teach both, or a manifest
+// will mean different things depending on which loader read it.
 func resolveLimits(limits WasmLimits, opts LoadOptions) WasmLimits {
 	resolved := limits
 	if resolved.MemoryMB == 0 {
