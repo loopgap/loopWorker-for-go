@@ -58,7 +58,7 @@ RUN apk add --no-cache binutils file && \
 # HEALTHCHECK below could not probe the API and a self-service customer cannot
 # `docker exec` in to look around. Cost: a few MB. Tradeoff documented in
 # .release/SCOPE-PROPOSAL.md.
-FROM alpine:3.22 AS runtime
+FROM alpine:3.24 AS runtime
 
 RUN apk add --no-cache ca-certificates tzdata curl && \
     addgroup -g 10001 loopworker && \
