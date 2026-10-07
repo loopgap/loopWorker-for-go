@@ -225,6 +225,53 @@ of LoopWorker has ever shipped. The first release is cut by a human with
   stated by `.release/build.ps1`, `release.yml` and the `.goreleaser.yaml`
   header are identical.
 
+### Changed
+
+* **Seven Dependabot branches merged into `main`, and the branches deleted.** The
+  remote carried one branch per pending dependency update; each is now a merge
+  commit on `main` and the branch is gone, so the only line of history is `main`.
+
+  The Go updates conflict with each other by design — five of them all rewrite
+  `go.mod`/`go.sum`, and each was authored against the same pre-merge base, so
+  five of the seven merges conflict. Each conflict was resolved by taking the
+  higher version per module rather than by taking a side wholesale:
+
+  | module | from | to |
+  | --- | --- | --- |
+  | `github.com/go-chi/chi/v5` | v5.3.0 | v5.3.2 |
+  | `github.com/prometheus/client_golang` | v1.23.2 | v1.24.1 |
+  | `go.yaml.in/yaml/v3` | v3.0.4 | v3.0.5 |
+  | `golang.org/x/crypto` | v0.56.0 | v0.57.0 |
+  | `modernc.org/sqlite` | v1.48.2 | v1.60.1 |
+
+  `modernc.org/sqlite` is the one worth reading twice: twelve minor releases, and
+  it drags `modernc.org/libc` v1.70.0 → v1.77.1 and `modernc.org/memory` v1.11.0
+  → v1.12.1 with it. It is the pure-Go SQLite driver that makes
+  `CGO_ENABLED=0` release binaries possible, so a regression here is a broken
+  product, not a broken build. Measured after the merge: `go build ./...` and
+  `go vet ./...` clean, `go test -count=1 ./...` green across all 22 packages
+  with tests, total coverage 84.2% (gate 80.0%) and per-shipped-binary coverage
+  `./cmd/loopworker` 80.5% / `./cmd/loopctl` 90.0% (floor 60.0%).
+
+  The other two updates: `alpine:3.22` → `alpine:3.24` in the Dockerfile runtime
+  stage, and a nine-action group bump (`goreleaser-action` v6→v7,
+  `upload-artifact` v4→v7, `build-push-action` v6→v7, `login-action` v3→v4).
+  `actionlint` and `goreleaser check` both pass on the result. The action bumps
+  are **not** verified to behave correctly in a real run — that needs GitHub
+  Actions, and it is the first thing to watch on the next push.
+
+* **`NOTICE` dependency versions brought back in line with `go.mod`.** The merge
+  made `relcheck`'s `checkNoticeDirectDependencies` fail with five version-drift
+  errors — the gate doing precisely the job it was added for. The licence text
+  of each of the five upgraded modules was read from `$GOMODCACHE` and compared
+  against what `NOTICE` claims, rather than the numbers being bumped blind: all
+  five licence identifiers and copyright lines are unchanged
+  (chi MIT, client_golang Apache-2.0, yaml/v3 MIT + Apache-2.0, x/crypto
+  BSD-3-Clause, sqlite BSD-3-Clause), so only the version numbers changed.
+
+  `go mod tidy` additionally dropped `go.yaml.in/yaml/v2` and `golang.org/x/tools`
+  from `go.mod`: after all seven updates nothing imports them any more.
+
 ### Removed
 
 * **Four developer CLIs: `loopbench`, `loopsim`, `loopdebug`, `loopwatch`.**
