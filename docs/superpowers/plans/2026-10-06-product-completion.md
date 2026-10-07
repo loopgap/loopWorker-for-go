@@ -1397,9 +1397,12 @@ anything under `web/canvas/src`.
 ```bash
 cd web/canvas
 npm ci
+npm test
 npm run build
 cd ../..
-rm -rf pkg/api/dist && mkdir -p pkg/api/dist && cp -r web/canvas/dist/. pkg/api/dist/
+mkdir -p pkg/api/dist && cp -r web/canvas/dist/. pkg/api/dist/
+diff -r web/canvas/dist pkg/api/dist    # must be empty
+ls pkg/api/dist/assets/index-*.js pkg/api/dist/assets/index-*.css   # one of each; delete leftovers
 rm -rf web/canvas/node_modules web/canvas/dist
 go build ./... && go test ./pkg/api/
 ```

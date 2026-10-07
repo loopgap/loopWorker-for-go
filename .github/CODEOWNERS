@@ -39,10 +39,6 @@ docs/api/              @loopgap
 # Deliberately de-scoped / cut-candidates (see .release/SCOPE-PROPOSAL.md):
 # these must not gain new dependencies without an owner's decision.
 web/canvas/            @loopgap
-cmd/loopbench/         @loopgap
-cmd/loopsim/           @loopgap
-cmd/loopdebug/         @loopgap
 cmd/loopctl/           @loopgap
-cmd/loopwatch/         @loopgap
 docs/product/          @loopgap
 .workbuddy/            @loopgap

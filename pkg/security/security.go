@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"go.uber.org/zap"
+
 	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/logger"
 )
@@ -231,7 +232,12 @@ func (sm *SecurityManager) pruneExpiredLocked() {
 
 func generateID() string {
 	b := make([]byte, 32)
-	rand.Read(b)
+	// crypto/rand.Read never returns an error on any supported platform, and an
+	// unchecked failure here would silently produce an id derived from zeros —
+	// two users could then collide on the same subject.
+	if _, err := rand.Read(b); err != nil {
+		panic("security: crypto/rand is unavailable: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }
 

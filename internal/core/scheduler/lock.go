@@ -69,7 +69,13 @@ func acquireInstanceLockTiming(dir, dbPath string, staleAfter, heartbeat time.Du
 		abs = l.path
 	}
 	if existing, ok := heldLocks.Load(abs); ok {
-		owner := existing.(*instanceLock)
+		owner, ok := existing.(*instanceLock)
+		if !ok {
+			// Only Acquire stores into this map, and it stores *instanceLock.
+			// Guarding anyway keeps a future caller from turning a type bug
+			// into a panic on the startup path.
+			return nil, fmt.Errorf("scheduler: internal lock registry is corrupt at %s", abs)
+		}
 		return nil, &InstanceRunningError{
 			DBPath:   owner.dbPath,
 			LockPath: owner.path,
@@ -149,6 +155,7 @@ func writeFileSynced(path string, data []byte) error {
 func (l *instanceLock) holder() (*InstanceRunningError, bool) {
 	info, err := os.Stat(l.path)
 	if err != nil {
+		//nolint:nilerr // "no lock file" is an answer to "does anyone hold it", not a failure
 		return nil, false
 	}
 	rec, ok := l.read()

@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
 	"loopworker/internal/core/dispatcher"
 	"loopworker/internal/core/sandbox"
 	"loopworker/internal/core/scheduler"
@@ -55,13 +56,18 @@ const (
 	workerStopped
 )
 
+// exitPublishTimeout bounds the worker-exit events recorded during a drain. The
+// drain's own context is already cancelled by then, so it needs a live one; the
+// bound keeps a wedged event store from holding shutdown open. Comfortably
+// inside the server's 10s shutdown drain.
+const exitPublishTimeout = 5 * time.Second
+
 type Worker struct {
 	ID          string
 	PluginID    string
 	state       int32
 	tasksRun    int64
 	tasksFailed int64
-	totalTime   time.Duration
 	stopCh      chan struct{}
 	doneCh      chan struct{}
 	taskCh      chan *scheduler.Task
@@ -204,16 +210,10 @@ func (e *Executor) StartWorker(ctx context.Context, workerID, pluginID string) e
 	atomic.AddInt32(&e.stats.ActiveWorkers, 1)
 	atomic.AddInt32(&e.stats.IdleWorkers, 1)
 
-	if e.eventBus != nil {
-		evt := event.NewEvent(event.EventWorkerSpawned, event.WorkerSpawnedPayload{
-			WorkerID: workerID,
-			PluginID: pluginID,
-		}, nil)
-		if err := e.eventBus.Publish(ctx, evt); err != nil {
-			// 记录错误但不阻塞worker启动
-			logger.Warn("failed to publish worker spawned event", zap.Error(err))
-		}
-	}
+	// worker.spawned is published by dispatcher.RegisterWorker above, which
+	// owns the worker registry. Publishing it here as well sent subscribers two
+	// identical spawn events per worker - an event log in which every worker
+	// appeared to start twice, and a stats counter that double-counted.
 
 	e.notifyWorkerFree()
 	return nil
@@ -226,10 +226,18 @@ func (e *Executor) StopWorker(ctx context.Context, workerID string) error {
 		e.mu.Unlock()
 		return fmt.Errorf("%w: %s", lwerrors.ErrWorkerNotFound, workerID)
 	}
-
+	// Claim the worker under the same lock that closes stopCh. The early
+	// delete used to be the claim, but it also made WorkerCount() report "no
+	// workers left" while this worker's exit event was still being written -
+	// and Server.Stop drains by watching exactly that counter, so it would close
+	// the event store underneath an in-flight publish ("event store closed").
+	// The state check keeps concurrent Stop calls safe without that lie.
+	if atomic.LoadInt32(&worker.state) == workerStopped {
+		e.mu.Unlock()
+		return fmt.Errorf("%w: %s", lwerrors.ErrWorkerNotFound, workerID)
+	}
 	atomic.StoreInt32(&worker.state, workerStopped)
 	close(worker.stopCh)
-	delete(e.workers, workerID)
 	e.mu.Unlock()
 
 	<-worker.doneCh
@@ -237,18 +245,18 @@ func (e *Executor) StopWorker(ctx context.Context, workerID string) error {
 	atomic.AddInt32(&e.stats.ActiveWorkers, -1)
 	atomic.AddInt32(&e.stats.IdleWorkers, -1)
 
-	if e.eventBus != nil {
-		evt := event.NewEvent(event.EventWorkerExited, event.WorkerExitedPayload{
-			WorkerID: workerID,
-			ExitCode: 0,
-		}, nil)
-		if err := e.eventBus.Publish(ctx, evt); err != nil {
-			// 记录错误但不阻塞worker停止
-			logger.Warn("failed to publish worker exited event", zap.Error(err))
-		}
-	}
+	// worker.exited is published by dispatcher.UnregisterWorker below, for the
+	// same reason: the executor used to publish it too and every worker exit
+	// reached subscribers twice.
+	err := e.dispatcher.UnregisterWorker(ctx, workerID)
 
-	return e.dispatcher.UnregisterWorker(ctx, workerID)
+	// Removed last, so a drain that sees WorkerCount() == 0 knows every exit
+	// event has already been handed to the event bus.
+	e.mu.Lock()
+	delete(e.workers, workerID)
+	e.mu.Unlock()
+
+	return err
 }
 
 func (e *Executor) StopAllWorkers(ctx context.Context) error {
@@ -364,7 +372,7 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 
 						// Publish skill invoked event when LLM skill is available
 						if err == nil && skillCtx.Bus != nil && skillCtx.Config != nil {
-							if llmClient, ok := skillCtx.Config["llm"].(interface{}); ok && llmClient != nil {
+							if llmClient := skillCtx.Config["llm"]; llmClient != nil {
 								if publishErr := skillCtx.Bus.Publish(ctx, event.NewEvent(event.EventSkillInvoked, event.SkillInvokedPayload{
 									SkillName: "llm.chat",
 									TaskID:    task.ID,
@@ -388,7 +396,7 @@ func (e *Executor) workerLoop(ctx context.Context, worker *Worker) {
 
 						// Publish skill invoked event when LLM skill is available
 						if execErr == nil && skillCtx.Bus != nil && skillCtx.Config != nil {
-							if llmClient, ok := skillCtx.Config["llm"].(interface{}); ok && llmClient != nil {
+							if llmClient := skillCtx.Config["llm"]; llmClient != nil {
 								_ = skillCtx.Bus.Publish(ctx, event.NewEvent(event.EventSkillInvoked, event.SkillInvokedPayload{
 									SkillName: "llm.chat",
 									TaskID:    task.ID,
@@ -455,7 +463,15 @@ func (e *Executor) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return e.StopAllWorkers(ctx)
+			// The context that triggered this drain is already done. Passing it
+			// straight down made the event store reject every worker exit with
+			// "context canceled", so a shutdown recorded nothing at all and the
+			// log filled with warnings instead. Detach from the cancellation but
+			// keep the values, and bound it so a wedged store cannot hang the
+			// drain that is trying to stop.
+			stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(ctx), exitPublishTimeout)
+			defer stopCancel()
+			return e.StopAllWorkers(stopCtx)
 		case <-notifyCh:
 			e.pumpQueue(ctx)
 		case <-e.workerFree:

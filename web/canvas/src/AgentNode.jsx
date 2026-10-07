@@ -1,10 +1,11 @@
 import React from 'react';
-import { Handle, Position } from 'reactflow';
+import { Handle, Position } from '@xyflow/react';
 import { Sparkles, CheckCircle, Play, XCircle, AlertCircle } from 'lucide-react';
 
 export default function AgentNode({ data }) {
   const task = data.task || {};
-  const state = task.State || 'pending';
+  // Lower-case JSON keys, matching the API payload - see WasmNode.
+  const state = task.state || 'pending';
 
   const getStateStyles = () => {
     switch (state) {
@@ -70,7 +71,7 @@ export default function AgentNode({ data }) {
             }}>Agent</span>
           </div>
           <span style={{ fontSize: '10px', color: '#94a3b8', fontFamily: 'monospace', display: 'block', marginTop: '2px' }}>
-            {task.ID || 'ID: Pending'}
+            {task.id || 'ID: Pending'}
           </span>
         </div>
       </div>
@@ -91,9 +92,9 @@ export default function AgentNode({ data }) {
           {styles.icon}
           {state.toUpperCase()}
         </div>
-        {task.AgentConfig && task.AgentConfig.Model && (
+        {task.agent_config && task.agent_config.model && (
           <span style={{ fontSize: '10px', color: '#94a3b8', marginLeft: 'auto', fontFamily: 'monospace' }}>
-            {task.AgentConfig.Model}
+            {task.agent_config.model}
           </span>
         )}
       </div>

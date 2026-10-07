@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+// JSONContentType is the media type of the envelope every /api/v1 route
+// returns, and the one openapi.json declares. It is set explicitly rather than
+// left to Go's sniffer: a body starting with '{' sniffs as text/plain, which
+// browsers tolerate and strict HTTP clients reject.
+const JSONContentType = "application/json; charset=utf-8"
+
 // writeJSON emits the envelope with stable field ordering and no HTML escaping.
 func writeJSON(w http.ResponseWriter, r *http.Request, status int, env Envelope) {
 	env.Timestamp = time.Now().UTC()
@@ -15,6 +21,9 @@ func writeJSON(w http.ResponseWriter, r *http.Request, status int, env Envelope)
 		env.Data = nil
 		env.Success = false
 	}
+	// Set before WriteHeader: headers written afterwards are ignored, and this
+	// is the only chance to declare the type.
+	w.Header().Set("Content-Type", JSONContentType)
 	if status > 0 {
 		w.WriteHeader(status)
 	}

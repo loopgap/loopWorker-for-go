@@ -58,6 +58,14 @@ var (
 	ErrDatabaseError  = errors.New("database error")
 	ErrNetworkError   = errors.New("network error")
 
+	// ErrPortUnavailable reports that the configured address could not be bound.
+	// It exists so the failure is machine-readable: the operating system error
+	// underneath it is not comparable across platforms (Windows reports
+	// WSAEADDRINUSE, where errors.Is against syscall.EADDRINUSE is false), so a
+	// host that wants to bind elsewhere and carry on - rather than stop and ask
+	// the operator - would otherwise have to match the rendered report text.
+	ErrPortUnavailable = errors.New("configured address cannot be bound")
+
 	// Circuit breaker errors
 	ErrCircuitOpen     = errors.New("circuit breaker is open")
 	ErrCircuitHalfOpen = errors.New("circuit breaker is half-open")

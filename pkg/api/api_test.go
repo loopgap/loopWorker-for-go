@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -757,6 +759,85 @@ func TestAdminLogsWithoutObserver(t *testing.T) {
 	env.AdminHandler().ServeHTTP(w, req)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("missing observer: want 503, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// adminLogsEntries GETs /logs on the admin listener and returns the entries.
+func (e *testEnv) adminLogsEntries(t *testing.T) []map[string]any {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/logs", nil)
+	req.Header.Set("X-API-Key", e.keys.admin)
+	w := httptest.NewRecorder()
+	e.AdminHandler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /logs: want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var body wire
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not JSON: %v\n%s", err, w.Body.String())
+	}
+	if !body.Success {
+		t.Fatalf("GET /logs: success=false: %s", w.Body.String())
+	}
+	var inner struct {
+		Logs []map[string]any `json:"logs"`
+	}
+	if err := json.Unmarshal(body.Data, &inner); err != nil {
+		t.Fatalf("data is not a {\"logs\":[...]} envelope: %v\n%s", err, w.Body.String())
+	}
+	return inner.Logs
+}
+
+// TestAdminLogsEntryShape pins the JSON the API reference promises for GET /logs,
+// read off the wire against the real observer rather than a stub.
+//
+// The prose and the payload had drifted apart once already: the reference showed
+// a populated entry whose fields map carried task_id and worker_id, and
+// worker_id appears nowhere in this repository. Comparing the exact key set is
+// what makes that class of drift fail here instead of in a customer's parser.
+func TestAdminLogsEntryShape(t *testing.T) {
+	env := newTestEnv(t)
+
+	// fields is the caller's map verbatim, so this is exactly what an operator
+	// would see if anything ever fed the ring.
+	env.obs.Log("info", "Task completed successfully", map[string]any{"task_id": "task-1"})
+
+	entries := env.adminLogsEntries(t)
+	if len(entries) != 1 {
+		t.Fatalf("want the one entry just logged, got %d: %+v", len(entries), entries)
+	}
+
+	got := slices.Sorted(maps.Keys(entries[0]))
+	want := []string{"fields", "level", "message", "timestamp"}
+	if !slices.Equal(got, want) {
+		t.Errorf("entry keys = %v, want exactly %v.\n"+
+			"worker_id/task_id are fields members, never top-level keys, and "+
+			"total/limit/offset do not exist: this is a ring snapshot, not a query.",
+			got, want)
+	}
+	if level := entries[0]["level"]; level != "info" {
+		t.Errorf("level = %v, want \"info\"", level)
+	}
+}
+
+// TestAdminLogsOmitsEmptyFields pins the "optional fields" the reference claims.
+// omitempty is what makes it true, and the difference is only visible in the
+// bytes — a client reading entry.fields.task_id sees nil either way.
+func TestAdminLogsOmitsEmptyFields(t *testing.T) {
+	env := newTestEnv(t)
+	env.obs.Log("warn", "no fields here", nil)
+
+	entries := env.adminLogsEntries(t)
+	if len(entries) != 1 {
+		t.Fatalf("want the one entry just logged, got %d: %+v", len(entries), entries)
+	}
+	if _, present := entries[0]["fields"]; present {
+		t.Errorf("an entry logged with nil fields must omit the key entirely, got %+v", entries[0])
+	}
+	got := slices.Sorted(maps.Keys(entries[0]))
+	want := []string{"level", "message", "timestamp"}
+	if !slices.Equal(got, want) {
+		t.Errorf("entry keys = %v, want exactly %v", got, want)
 	}
 }
 

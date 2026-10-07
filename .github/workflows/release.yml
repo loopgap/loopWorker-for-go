@@ -8,6 +8,12 @@ name: Release
 #           (later betas: v0.1.0-beta.1, v0.1.0-beta.2, ...)
 #           (a human runs this; nothing in this workflow ever creates a tag)
 #
+# Each tag needs its own CHANGELOG heading — "## [0.1.0-beta.1] — …", not the
+# 0.1.0-beta one — because preflight matches the heading to the tag exactly.
+# The gate is deliberately per-tag: one beta's notes are not evidence about the
+# next one, and a version that ships without a section of its own is exactly the
+# "release notes that lag" case the step was written to stop.
+#
 # Output per release:
 #   * 5 archives: linux amd64/arm64, darwin amd64/arm64, windows amd64 (.exe in a .zip)
 #   * deb + rpm packages
@@ -38,6 +44,7 @@ env:
   GORELEASER_VERSION: v2.9.0
   SYFT_VERSION: v1.9.0
   COSIGN_VERSION: v3.1.3
+  GO_LICENSES_VERSION: v2.0.1
   COVERAGE_MIN: "80"
 
 jobs:
@@ -67,8 +74,21 @@ jobs:
         run: |
           set -euo pipefail
           v="${GITHUB_REF_NAME#v}"
-          if ! grep -qE "^## \[?${v}\]?" CHANGELOG.md; then
+          # The version is escaped before it becomes a pattern, and the pattern is
+          # anchored at the end of the version. Interpolated raw it was wrong in
+          # both directions, and both are the kind of wrong that lets a release
+          # through, or blocks a legitimate one, with no error to notice:
+          #   * `.` was a wildcard, so a CHANGELOG documenting nothing but
+          #     "0x1y0-beta" satisfied the gate for the tag v0.1.0-beta;
+          #   * an unanchored prefix match meant tagging v0.1.0-beta passed on a
+          #     heading written for v0.1.0-beta.1 — a release with no notes of
+          #     its own, which is the exact failure this step exists to prevent;
+          #   * `+` is a repetition operator in ERE, so v1.2.3-rc.1+build — a
+          #     legal semver tag — could never pass at all.
+          esc=$(printf '%s' "$v" | sed 's/[^a-zA-Z0-9]/\\&/g')
+          if ! grep -qE "^## \[?${esc}\]?([[:space:]]|\$)" CHANGELOG.md; then
             echo "::error::CHANGELOG.md has no section for ${GITHUB_REF_NAME}. Release notes that oversell or lag create tickets; write them first."
+            echo "::error::each tag needs its own heading — '## [${v}] — <what shipped>' — later betas included (${v}.1, ${v}.2, …), not the first beta's section."
             exit 1
           fi
 
@@ -126,7 +146,10 @@ jobs:
 
       - name: Generate third-party license texts (obligation for static Go binaries)
         run: |
-          go install github.com/google/go-licenses/v2@v2.0.1
+          # Version comes from the workflow env block, not from a literal here:
+          # relcheck's tool-pin gate only sees *_VERSION declarations, so an
+          # inline pin would be invisible to it and could drift unnoticed.
+          go install "github.com/google/go-licenses/v2@${GO_LICENSES_VERSION}"
           export PATH="$(go env GOPATH)/bin:$PATH"
           go-licenses save ./... --save_path=THIRD-PARTY-LICENSES --force
           go-licenses report ./... > THIRD-PARTY-NOTICES.csv
@@ -139,7 +162,10 @@ jobs:
             echo
             echo "| Module | License |"
             echo "|---|---|"
-            awk -F, 'NR>1 {print "| "$1" | "$2" |"}' THIRD-PARTY-NOTICES.csv
+            # No `NR>1` here: `go-licenses report` writes no header line, so
+            # skipping the first record silently dropped a real dependency
+            # (beorn7/perks) from the attribution table shipped with the release.
+            awk -F, '{print "| "$1" | "$3" |"}' THIRD-PARTY-NOTICES.csv
           } > THIRD-PARTY-NOTICES.md
           find THIRD-PARTY-LICENSES -type f | wc -l
 
@@ -197,12 +223,28 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
+      # No sparse-checkout here, deliberately. This job checks out the artifact
+      # and then builds a plugin from source: .release/scripts/boot-smoke.sh
+      # compiles examples/hello-plugin to wasip1 and copies its plugin.json, so
+      # it needs the module (go.mod, go.sum) and that directory. A sparse list
+      # of `.release` and `docs` excluded them, and gate 4 failed on all three
+      # platforms with "could not build examples/hello-plugin" — a release
+      # blocked at its own zero-after-sales test. A full checkout costs seconds;
+      # a list that has to be kept in step with what the smoke script reads is a
+      # failure mode that only shows up on the day you cut a tag.
       - uses: actions/checkout@v4
+
+      # This job compiles Go, and it was the one job in the repository that did
+      # not say so. .release/scripts/boot-smoke.sh builds examples/hello-plugin
+      # for wasip1/wasm (boot-smoke.sh:146) before it can run any smoke gate, so
+      # without this step the whole "zero after-sales" test was being validated
+      # against whatever Go happened to be preinstalled on the runner image —
+      # an unpinned toolchain on the one job whose job is to prove a customer
+      # can install the artifact. Every other job in this file already derives
+      # its Go from go.mod; this one now does too.
+      - uses: actions/setup-go@v5
         with:
-          sparse-checkout: |
-            .release
-            docs
-          sparse-checkout-cone-mode: false
+          go-version-file: go.mod
 
       - uses: actions/download-artifact@v4
         with:
@@ -226,28 +268,46 @@ jobs:
 
       - name: sha256 must match checksums.txt
         shell: bash
+        # This used to shell out to `python3`. That is a dependency on an
+        # interpreter this step never asked for, on a leg that runs on three
+        # different runner images — and whether `python3` (as opposed to
+        # `python`) resolves on windows-latest could not be confirmed, so the
+        # step carried a risk nobody had measured. It now needs nothing beyond
+        # the shell: awk is everywhere, and every runner that has neither
+        # sha256sum nor shasum now fails with a sentence naming the gap instead
+        # of "command not found" two lines later.
+        #
+        # The comparison logic is unchanged from the Python original, including
+        # the two details goreleaser's checksums.txt format requires: a binary
+        # marker (`*`) may precede the filename, and the name may carry a
+        # directory prefix, so the match is on the basename.
         run: |
           set -euo pipefail
-          base=$(basename "${{ steps.pick.outputs.archive }}")
-          python3 - "$base" dist/checksums.txt <<'PY'
-          import hashlib, sys
-          name, idx = sys.argv[1], sys.argv[2]
-          want = None
-          for line in open(idx, encoding='utf-8'):
-              line = line.strip()
-              if not line:
-                  continue
-              parts = line.split(None, 1)
-              if len(parts) == 2 and parts[1].lstrip('*').split("/")[-1] == name:
-                  want = parts[0]
-                  break
-          if want is None:
-              sys.exit(f"checksums.txt has no entry for {name}")
-          got = hashlib.sha256(open("dist/" + name, "rb").read()).hexdigest()
-          if got != want:
-              sys.exit(f"SHA256 MISMATCH for {name}\n  expected {want}\n  got      {got}")
-          print(f"sha256 OK  {name}  {got}")
-          PY
+          a="${{ steps.pick.outputs.archive }}"
+          base=$(basename "$a")
+          want=$(awk -v target="$base" '
+            NF >= 2 {
+              file = $2
+              sub(/^\*/, "", file)
+              n = split(file, part, "/")
+              if (part[n] == target) { print $1; found = 1; exit }
+            }
+            END { if (!found) exit 3 }
+          ' dist/checksums.txt) || { echo "::error::checksums.txt has no entry for ${base}"; exit 1; }
+          if command -v sha256sum >/dev/null 2>&1; then
+            got=$(sha256sum "$a" | awk '{print $1}')
+          elif command -v shasum >/dev/null 2>&1; then
+            got=$(shasum -a 256 "$a" | awk '{print $1}')
+          else
+            echo "::error::neither sha256sum nor shasum is available on this runner, so the shipped artifact cannot be verified"; exit 1
+          fi
+          if [ "$got" != "$want" ]; then
+            echo "::error::SHA256 MISMATCH for ${base}"
+            echo "  expected ${want}"
+            echo "  got      ${got}"
+            exit 1
+          fi
+          echo "sha256 OK  ${base}  ${got}"
 
       - name: SBOM + signature exist for this artifact (publish runs only)
         if: github.event_name == 'push' && github.ref_type == 'tag'

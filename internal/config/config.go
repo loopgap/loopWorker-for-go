@@ -32,8 +32,9 @@ type Config struct {
 	Workflow WorkflowConfig `yaml:"workflow" json:"workflow"`
 	LLM      LLMConfig      `yaml:"llm" json:"llm"`
 
-	sources    map[string]string
-	configFile string
+	sources       map[string]string
+	configFile    string
+	searchedPaths []string
 }
 
 type ServerConfig struct {
@@ -202,6 +203,11 @@ func defaultWorkDir() string {
 
 // ConfigFile is the file the values were read from, empty when none was found.
 func (c *Config) ConfigFile() string { return c.configFile }
+
+// SearchedPaths are the directories scanned for a config file when none was
+// found. Empty when an explicit --config path was given, or when a file was
+// located, because in both cases there was no search to report.
+func (c *Config) SearchedPaths() []string { return c.searchedPaths }
 
 // DBPath is the absolute path of the scheduler database.
 func (c *Config) DBPath() string {

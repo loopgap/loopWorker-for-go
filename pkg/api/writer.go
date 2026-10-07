@@ -82,6 +82,7 @@ func (sw *statusWriter) ReadFrom(reader io.Reader) (int64, error) {
 func (b *middlewareBundle) accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writer := newStatusWriter(w)
+		//nolint:contextcheck // a deferred access-log line must still be written after the handler returns, when r.Context is already cancelled
 		defer func() {
 			if isStreamingPath(r.URL.Path) {
 				return

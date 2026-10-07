@@ -110,7 +110,7 @@ func (req *CreateTaskRequest) resolveInput(cfg Config) ([]byte, error) {
 		return &FieldError{
 			Field:   field,
 			Reason:  "the encoded input is " + itoa(n) + " bytes, over the " + itoa64(maxInput) + " byte limit",
-			Fix:     "store the blob in object storage and reference it from \"config\", or raise api.max_input_bytes",
+			Fix:     "store the blob in object storage and reference it from \"config\"; the input ceiling is not configurable, so reducing the payload is the only lever",
 			Status:  http.StatusRequestEntityTooLarge,
 			Code:    CodeRequestTooLarge,
 			Details: map[string]any{"limit_bytes": maxInput},

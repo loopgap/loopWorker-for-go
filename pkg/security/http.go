@@ -34,7 +34,9 @@ func WriteAuthFailure(w http.ResponseWriter, _ *http.Request, status int, code, 
 		},
 	}
 	if len(details) > 0 {
-		body["error"].(map[string]any)["details"] = details
+		if errBody, ok := body["error"].(map[string]any); ok {
+			errBody["details"] = details
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

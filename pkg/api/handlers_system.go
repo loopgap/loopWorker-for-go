@@ -242,6 +242,7 @@ func (s *APIServer) executeWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	// Detach from the request context: the workflow must outlive the 202 reply.
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.RequestTimeout*10)
+	//nolint:contextcheck // inheriting r.Context would cancel the run as soon as the 202 reply is written
 	utils.GoSafe(ctx, func(run context.Context) {
 		defer cancel()
 		if err := s.deps.Workflows.Execute(run, id); err != nil {

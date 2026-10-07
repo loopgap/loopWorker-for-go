@@ -41,7 +41,7 @@ func Load(opts Options) (*Config, error) {
 
 	cfg := Defaults()
 
-	path, err := resolveConfigFile(opts.ConfigFile)
+	path, searched, err := resolveConfigFile(opts.ConfigFile)
 	if err != nil {
 		return nil, err
 	}
@@ -50,6 +50,8 @@ func Load(opts Options) (*Config, error) {
 			return nil, err
 		}
 		cfg.configFile = path
+	} else {
+		cfg.searchedPaths = searched
 	}
 
 	if err := applyEnv(cfg); err != nil {
@@ -70,43 +72,45 @@ func Load(opts Options) (*Config, error) {
 	return cfg, nil
 }
 
-func resolveConfigFile(explicit string) (string, error) {
+func resolveConfigFile(explicit string) (string, []string, error) {
 	if explicit == "" {
 		explicit = os.Getenv(EnvConfig)
 	}
 	if explicit != "" {
 		abs, err := filepath.Abs(explicit)
 		if err != nil {
-			return "", fmt.Errorf("resolve config path %s: %w", explicit, err)
+			return "", nil, fmt.Errorf("resolve config path %s: %w", explicit, err)
 		}
 		data, err := os.ReadFile(abs)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return "", fmt.Errorf("config file %s does not exist: pass an existing file with --config, unset %s, or omit both to run on defaults", abs, EnvConfig)
+				return "", nil, fmt.Errorf("config file %s does not exist: pass an existing file with --config, unset %s, or omit both to run on defaults", abs, EnvConfig)
 			}
-			return "", fmt.Errorf("read config file %s: %w", abs, err)
+			return "", nil, fmt.Errorf("read config file %s: %w", abs, err)
 		}
 		if len(data) == 0 {
-			return "", fmt.Errorf("config file %s is empty", abs)
+			return "", nil, fmt.Errorf("config file %s is empty", abs)
 		}
-		return abs, nil
+		return abs, nil, nil
 	}
 
-	var searched []string
 	dirs, err := searchDirs()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	for _, dir := range dirs {
 		for _, name := range candidateFileNames {
 			candidate := filepath.Join(dir, name)
-			searched = append(searched, candidate)
 			if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Size() > 0 {
-				return candidate, nil
+				return candidate, nil, nil
 			}
 		}
 	}
-	return "", nil
+	// Nothing was found, so the caller runs on defaults. Return the directories
+	// anyway: "I edited config.yaml and the setting did not change" is
+	// unanswerable without knowing where the loader looked, and a file left in
+	// the wrong directory produces no other clue at all.
+	return "", dirs, nil
 }
 
 func searchDirs() ([]string, error) {

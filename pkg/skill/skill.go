@@ -3,8 +3,9 @@ package skill
 import (
 	"context"
 	"errors"
-	"loopworker/pkg/event"
 	"sync"
+
+	"loopworker/pkg/event"
 )
 
 // SkillDefinition describes a capability that a plugin can declare and consume.

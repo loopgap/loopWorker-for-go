@@ -217,8 +217,8 @@
         "responses": { "200": { "description": "text/plain metrics" }, "401": { "$ref": "#/components/responses/Unauthorized" } } }
     },
     "/logs": {
-      "get": { "tags": ["admin"], "operationId": "adminLogs", "summary": "Observer log tail (admin listener only)",
-        "responses": { "200": { "description": "logs" }, "401": { "$ref": "#/components/responses/Unauthorized" } } }
+      "get": { "tags": ["admin"], "operationId": "adminLogs", "summary": "Observer's in-memory log ring (admin listener only) - always empty in production, because nothing calls Observer.Log",
+        "responses": { "200": { "description": "logs (currently always an empty array)" }, "401": { "$ref": "#/components/responses/Unauthorized" } } }
     },
     "/runtime/stats": {
       "get": { "tags": ["admin"], "operationId": "adminStats", "summary": "Counters, limits and stream usage (admin listener only)",

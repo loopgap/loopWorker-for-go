@@ -11,9 +11,10 @@ import (
 	"strconv"
 	"strings"
 
-	"loopworker/version"
 	"testing"
 	"time"
+
+	"loopworker/version"
 
 	"loopworker/internal/core/scheduler"
 	"loopworker/pkg/security"
@@ -862,7 +863,7 @@ func TestUnwrapFlusherReportsAMissingFlusher(t *testing.T) {
 	}
 }
 
-type nonFlushingWriter struct{ header http.Header }
+type nonFlushingWriter struct{}
 
 func (nonFlushingWriter) Header() http.Header       { return http.Header{} }
 func (nonFlushingWriter) Write([]byte) (int, error) { return 0, nil }

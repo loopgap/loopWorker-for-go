@@ -86,7 +86,7 @@ func BackupDatabase(dbPath, destPath string) (BackupResult, error) {
 	// to right now, and the number an operator can verify by opening the copy is the one
 	// the copy itself holds.
 	if err := db.Close(); err != nil {
-		return BackupResult{}, fmt.Errorf("scheduler: close %s after backup: %w (%v)", src, ErrStorageUnavailable, err)
+		return BackupResult{}, fmt.Errorf("scheduler: close %s after backup: %w (%w)", src, ErrStorageUnavailable, err)
 	}
 	if res.Rows, err = countArtifactRows(res.Path); err != nil {
 		return BackupResult{}, fmt.Errorf("scheduler: backup %s reported success but %s cannot be read back: %w "+
@@ -140,7 +140,7 @@ func InspectDatabase(dbPath string) (StorageInfo, error) {
 func openOfflineDatabase(dbPath string) (string, *sql.DB, error) {
 	path, err := filepath.Abs(strings.TrimSpace(dbPath))
 	if err != nil {
-		return "", nil, fmt.Errorf("scheduler: resolve task database %q: %w (%v)", dbPath, ErrStorageUnavailable, err)
+		return "", nil, fmt.Errorf("scheduler: resolve task database %q: %w (%w)", dbPath, ErrStorageUnavailable, err)
 	}
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -165,10 +165,10 @@ func openOfflineDatabase(dbPath string) (string, *sql.DB, error) {
 	// current write transaction instead of failing.
 	db, err := sql.Open(driverName, "file:"+escapeDSN(path)+"?mode=ro&_pragma="+url.QueryEscape("busy_timeout(5000)"))
 	if err != nil {
-		return "", nil, fmt.Errorf("scheduler: open task database %s: %w (%v)", path, ErrStorageUnavailable, err)
+		return "", nil, fmt.Errorf("scheduler: open task database %s: %w (%w)", path, ErrStorageUnavailable, err)
 	}
 	var probe int64
-	if err := db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&probe); err != nil {
+	if err := db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM tasks").Scan(&probe); err != nil {
 		db.Close()
 		return "", nil, fmt.Errorf("scheduler: %s is not a LoopWorker task database: %w (%v).\n"+
 			"  Fix: check data.db_file and data.dir; point --data-dir at the directory that holds the file.\n"+
@@ -188,7 +188,7 @@ func checkBackupDestination(srcPath, destPath string) (string, error) {
 	}
 	abs, err := filepath.Abs(dest)
 	if err != nil {
-		return "", fmt.Errorf("scheduler: resolve backup destination %q: %w (%v)", destPath, ErrStorageUnavailable, err)
+		return "", fmt.Errorf("scheduler: resolve backup destination %q: %w (%w)", destPath, ErrStorageUnavailable, err)
 	}
 	if samePath(abs, srcPath) {
 		return "", fmt.Errorf("scheduler: backup destination %s is the task database itself: %w.\n"+
@@ -228,7 +228,7 @@ func checkBackupDestination(srcPath, destPath string) (string, error) {
 func countTaskRows(ctx context.Context, db *sql.DB) (int64, error) {
 	var rows int64
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks").Scan(&rows); err != nil {
-		return 0, fmt.Errorf("scheduler: count tasks: %w (%v)", lwerrors.ErrDatabaseError, err)
+		return 0, fmt.Errorf("scheduler: count tasks: %w (%w)", lwerrors.ErrDatabaseError, err)
 	}
 	return rows, nil
 }

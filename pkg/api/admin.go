@@ -17,6 +17,17 @@ import (
 	"loopworker/pkg/security"
 )
 
+// AdminControl is the process-lifecycle surface the admin listener exposes.
+//
+// pkg/api cannot reach Server.Stop - the host owns the process, this package
+// only owns the HTTP surface - so the host injects the two handlers it already
+// has. Keeping them behind an interface is what lets /shutdown move off the
+// public listener without pkg/api depending on pkg/server.
+type AdminControl interface {
+	AdminShutdown(w http.ResponseWriter, r *http.Request)
+	AdminStatus(w http.ResponseWriter, r *http.Request)
+}
+
 // AdminAddr returns the loopback address the metrics listener should bind to.
 func (s *APIServer) AdminAddr() string {
 	bind := s.cfg.AdminBind
@@ -54,6 +65,17 @@ func (s *APIServer) AdminHandler() http.Handler {
 		authed.Get("/runtime/stats", s.adminStats)
 		authed.Get("/logs", s.adminLogs)
 		authed.Get("/events/stats", s.adminEventStats)
+
+		// Lifecycle and status used to hang off the public listener with no
+		// credential at all, which let anyone who could reach the port stop the
+		// server or read its runtime statistics. They belong here, behind the
+		// admin permission, on a listener bound to loopback.
+		if c := s.cfg.AdminControl; c != nil {
+			// Method, not Handle, for the same reason as /metrics above: Handle
+			// would register every verb and widen the contract silently.
+			authed.Method(http.MethodPost, "/shutdown", http.HandlerFunc(c.AdminShutdown))
+			authed.Get("/statusz", c.AdminStatus)
+		}
 	})
 	return router
 }
@@ -76,6 +98,13 @@ func (s *APIServer) adminStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // adminLogs answers GET /logs from the observer (replaces the old public route).
+//
+// The answer is {"logs":[]} in production, and that is not a wiring failure:
+// o.logs has exactly one writer, observer.Observer.Log, and no non-test code in
+// the repository calls it. Application logging goes straight to pkg/logger's zap,
+// never through the observer, so the ring stays empty. The doc says so too, and
+// an empty array here must not be read as "my server is broken" — point operators
+// at the process's own stdout/stderr instead.
 func (s *APIServer) adminLogs(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Observer == nil {
 		sendError(w, r, missingDependency("observer", "the observer is not wired into this server"))
@@ -140,8 +169,10 @@ func (s *APIServer) StartAdmin(ctx context.Context) (*http.Server, error) {
 	// away. Serving from a background goroutine and hoping an error shows up
 	// within a timeout turns that clear message into a listener that dies after
 	// StartAdmin already reported success - and under load the goroutine may not
-	// even have run yet.
-	ln, err := net.Listen("tcp", s.AdminAddr())
+	// even have run yet. The caller's context is the boot context, so a boot that
+	// is being torn down abandons the bind instead of leaving a half-bound
+	// listener behind.
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", s.AdminAddr())
 	if err != nil {
 		return nil, fmt.Errorf("admin listener cannot bind %s: %w", s.AdminAddr(), err)
 	}
@@ -153,6 +184,5 @@ func (s *APIServer) StartAdmin(ctx context.Context) (*http.Server, error) {
 			logger.Error("admin listener stopped", zap.Error(err), zap.String("address", ln.Addr().String()))
 		}
 	}()
-	_ = ctx // binding is synchronous; the caller's context cannot cancel it
 	return server, nil
 }

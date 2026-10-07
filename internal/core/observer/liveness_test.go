@@ -45,15 +45,6 @@ func labelNamesOf(family *dto.MetricFamily) []string {
 	return names
 }
 
-func contains(names []string, want string) bool {
-	for _, n := range names {
-		if n == want {
-			return true
-		}
-	}
-	return false
-}
-
 // TestTaskCompletedMetricHasNoResultLabel is the F7 regression guard for metric
 // cardinality. The completed counter and the duration histogram used to be
 // labelled with a slice of the task's *result payload*, so every distinct result
@@ -275,22 +266,6 @@ func countSeries(family *dto.MetricFamily) int {
 		return 0
 	}
 	return len(family.GetMetric())
-}
-
-// metricSeriesCounts maps every gathered metric name to its series count.
-func metricSeriesCounts(t *testing.T) map[string]int {
-	t.Helper()
-	out := map[string]int{}
-	for name, family := range metricNames(t) {
-		out[name] = len(family.GetMetric())
-	}
-	return out
-}
-
-// accumulatorView is a read-only copy of one in-memory metric accumulator.
-type accumulatorView struct {
-	key string
-	sum float64
 }
 
 // counterValue reads one accumulator's sum out of the in-memory metric map.

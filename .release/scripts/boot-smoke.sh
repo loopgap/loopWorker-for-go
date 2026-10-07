@@ -44,6 +44,7 @@ BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
 DATA="$(mktemp -d /tmp/lw-smoke-data.XXXXXX)"
 PLUGINS="$(mktemp -d /tmp/lw-smoke-plugins.XXXXXX)"
 LOG="$(mktemp /tmp/lw-smoke.log.XXXXXX)"
+BODY="$(mktemp /tmp/lw-smoke-body.XXXXXX)"
 cleanup() {
   # The server holds the database open; kill it before removing the dir or the
   # removal fails with EBUSY and leaves the harness looking like the culprit.
@@ -53,6 +54,9 @@ cleanup() {
     kill -9 "$PID" 2>/dev/null || true
   fi
   rm -rf "$DATA" "$PLUGINS" 2>/dev/null || true
+  # BODY belongs to the same set. It used to be created further down with its own
+  # mktemp and never removed, so every run left a response body behind in /tmp.
+  rm -f "$BODY" 2>/dev/null || true
   [ -n "${KEEP_LOG:-}" ] || rm -f "$LOG" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -62,9 +66,15 @@ PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));prin
 [ -z "$PORT" ] && PORT=19527
 
 export LOOPWORKER_PORT="$PORT" LOOPWORKER_DATA_DIR="$DATA" LOOPWORKER_PLUGINS_DIR="$PLUGINS" LOOPWORKER_LOG_LEVEL=debug
-# The admin listener uses a fixed default port and the server refuses to start
-# without it, so two smoke runs (or a developer's own server) would collide.
-# Take a free one.
+# The admin listener has a fixed default port. A collision there is NOT fatal —
+# pkg/server/server.go deliberately degrades it to a warning, because the admin
+# listener is observability and must not take down a server whose API port is
+# free. (An earlier version of this comment said the server "refuses to start"
+# without it. That was true once and stopped being true when the degradation was
+# introduced; the advice below is still right, the justification was not.)
+# Still take a free port: a collision costs this run its /metrics and
+# /runtime/stats, and a developer's own server holding 19528 would do it every
+# time.
 ADMIN_PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()' 2>/dev/null || true)"
 [ -n "$ADMIN_PORT" ] && export LOOPWORKER_API_ADMIN_PORT="$ADMIN_PORT"
 
@@ -96,18 +106,17 @@ kill -0 "$PID" 2>/dev/null || fail "process exited immediately (crash-on-start c
 
 # gate 2: health endpoint
 code=""
-body="$(mktemp)"
 for i in $(seq 1 "$BOOT_TIMEOUT"); do
   kill -0 "$PID" 2>/dev/null || fail "process died at iteration $i before health passed"
   hdr_args=()
   [ -n "${LOOPWORKER_SMOKE_TOKEN:-}" ] && hdr_args=(-H "Authorization: Bearer ${LOOPWORKER_SMOKE_TOKEN}")
-  code="$(curl -sS -o "$body" -w '%{http_code}' --max-time 4 ${hdr_args[@]+"${hdr_args[@]}"} "http://127.0.0.1:${PORT}/api/v1/health" 2>/dev/null || echo 000)"
+  code="$(curl -sS -o "$BODY" -w '%{http_code}' --max-time 4 ${hdr_args[@]+"${hdr_args[@]}"} "http://127.0.0.1:${PORT}/api/v1/health" 2>/dev/null || echo 000)"
   [ "$code" = "200" ] && break
   sleep 1
 done
 [ "$code" = "200" ] || fail "GET /api/v1/health returned HTTP $code after ${BOOT_TIMEOUT}s (expected 200)"
-echo "PASS  health 200: $(head -c 300 "$body")"
-grep -q '"status"' "$body" || fail "health response has no \"status\" field — API contract drift"
+echo "PASS  health 200: $(head -c 300 "$BODY")"
+grep -q '"status"' "$BODY" || fail "health response has no \"status\" field — API contract drift"
 
 # gate 3: no anonymous writes. /api/v1/health is deliberately anonymous, so a
 # 200 there says nothing about whether the mutating surface is guarded.
@@ -120,13 +129,29 @@ echo "PASS  anonymous write refused with 401"
 # gate 4: a task actually runs. Requires a runnable plugin.
 API_KEY=(-H "X-API-Key: $SMOKE_KEY")
 echo "=== staging examples/hello-plugin into $PLUGINS ==="
-REPO_ROOT="$(cd "$(dirname "$BIN")/../.." 2>/dev/null && pwd)"
+# The repository root is derived from where *this script* lives, not from where
+# the binary lives. ci.yml passes bin/loopworker and release.yml passes an
+# artifact unpacked somewhere else entirely, so a root derived from $BIN is wrong
+# in both cases — it used to be "$(dirname $BIN)/../..", which is the repository
+# root only for a script at .release/scripts/. It happened to work because the
+# next line falls back to $PWD, and both jobs run from the repository root; that
+# rescue was accidental, and it is one edit away from silently breaking. $PWD
+# stays as the last resort for a script invoked by an absolute path from
+# somewhere else.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd)"
 [ -d "$REPO_ROOT/examples/hello-plugin" ] || REPO_ROOT="$PWD"
 WASM="${HELLO_WASM:-$REPO_ROOT/examples/hello-plugin/hello.wasm}"
 if [ ! -f "$WASM" ]; then
-  echo "building hello.wasm (GOOS=wasip1 GOARCH=wasm)"
-  ( cd "$REPO_ROOT" && GOOS=wasip1 GOARCH=wasm go build -trimpath -o "$WASM" ./examples/hello-plugin/ ) \
+  # Build into the scratch plugins dir, never into the repository. Writing the
+  # fallback to the tracked path made a smoke run leave a committed binary
+  # modified, which is exactly the kind of unexplained dirty file a smoke test
+  # must not create.
+  echo "building hello.wasm (GOOS=wasip1 GOARCH=wasm) into $PLUGINS/.build"
+  mkdir -p "$PLUGINS/.build"
+  ( cd "$REPO_ROOT" && GOOS=wasip1 GOARCH=wasm go build -trimpath -o "$PLUGINS/.build/hello.wasm" ./examples/hello-plugin/ ) \
     || fail "could not build examples/hello-plugin; gate 4 cannot run"
+  WASM="$PLUGINS/.build/hello.wasm"
 fi
 [ -f "$WASM" ] || fail "no hello.wasm at $WASM; gate 4 cannot run"
 mkdir -p "$PLUGINS/hello"

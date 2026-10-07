@@ -28,6 +28,7 @@ env:
   GOVULNCHECK_VERSION: v1.8.0
   ACTIONLINT_VERSION: v1.7.11
   SYFT_VERSION: v1.9.0
+  TRIVY_VERSION: v0.75.0
   COVERAGE_MIN: "80"
   # Floor for each package that actually ships. Keep this list equal to the
   # binaries in .goreleaser.yaml's build target: a package in cmd/ that is not
@@ -57,7 +58,16 @@ jobs:
           try:
               import yaml
           except ImportError:
-              sys.exit(0)  # validated by goreleaser/actionlint below
+              # Say so instead of exiting quietly. A step that prints nothing
+              # and passes reads as "the YAML was checked"; whether PyYAML is
+              # preinstalled on the runner image is not this repository's
+              # decision to leave to a runner release note. The three files are
+              # validated for real by the steps around it -- actionlint parses
+              # every workflow, `goreleaser check` parses .goreleaser.yaml, and
+              # golangci-lint refuses to start on a broken .golangci.yaml --
+              # so this is a redundant early signal, not the only one.
+              print("::warning::PyYAML not installed; skipping the redundant YAML parse check")
+              sys.exit(0)
           for f in glob.glob('.goreleaser.yaml') + glob.glob('.golangci.yaml') + glob.glob('.github/workflows/*.yml'):
               with open(f) as fh:
                   yaml.safe_load(fh)
@@ -191,6 +201,47 @@ jobs:
         # data race. Now it covers everything, so it cannot hide again.
         run: go test -race -count=1 -timeout 20m ./...
 
+  canvas:
+    name: Canvas UI (lint, test, build, embed sync)
+    runs-on: ubuntu-latest
+    # This file used to have no frontend steps at all, which is how the canvas
+    # shipped eight defects - the node cards read Go field names against a
+    # lower-case JSON API, a plain-text payload was run through atob(), and the
+    # live stream ignored tasks created outside the canvas - with CI green
+    # throughout. pkg/api/dist is committed and pulled into the binary by
+    # go:embed, so "the frontend is broken" and "the server serves stale
+    # assets" were both invisible here.
+    defaults:
+      run:
+        working-directory: web/canvas
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/canvas/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Committed embed matches this build
+        # A source change that is never synced into pkg/api/dist ships the old
+        # canvas while every Go test stays green.
+        #
+        # These paths are relative to this job's working-directory (web/canvas),
+        # not to the repository root. `web/canvas/dist` from here resolves to
+        # web/canvas/web/canvas/dist, which does not exist, and diff then fails
+        # with the misleading "pkg/api/dist is stale" message on every PR. The
+        # same ../../ prefix convention is used by the coverage job below.
+        run: |
+          diff -r dist ../../pkg/api/dist \
+            || (echo "::error::pkg/api/dist is stale — run 'npm run build' in web/canvas and sync the output into pkg/api/dist" && exit 1)
+
   coverage:
     name: Coverage gate (>= 80%)
     runs-on: ubuntu-latest
@@ -212,8 +263,8 @@ jobs:
         # list is explicit on purpose: adding a binary to cmd/ without a floor
         # here makes this step fail, which turns "is this shippable?" into a
         # decision someone has to make rather than a number nobody reads.
-        # Packages that do not ship (loopbench, loopsim, loopdebug, loopwatch)
-        # are deliberately absent - see .release/SCOPE-PROPOSAL.md.
+        # The other four dev CLIs (loopbench, loopsim, loopdebug, loopwatch)
+        # were deleted as dev-scratch tools; see .release/SCOPE-PROPOSAL.md.
         working-directory: .release/tools
         run: go run ./covergate -pkg "${{ env.SHIPPED_PKGS }}" -pkg-min "${COVERAGE_PKG_MIN}" -file ../../coverage.out
       - name: Coverage HTML artifact (informational)
@@ -291,9 +342,15 @@ jobs:
             GIT_COMMIT=${{ github.sha }}
       - name: Boot container, hit /api/v1/health, prove graceful SIGTERM
         run: bash .release/scripts/docker-smoke.sh loopworker:smoke 19527
-      - name: Trivy image scan (fail on CRITICAL)
+      # The name states what the command does. It read "fail on CRITICAL" while
+      # the command below has failed on HIGH too since the job was written, and a
+      # step name that understates the gate is the same drift class this repo's
+      # other checks exist to catch --ignore-unfixed is a deliberate weakening
+      # (an advisory with no fixed version cannot be remediated by changing the
+      # image), so it is named here rather than left to be discovered.
+      - name: Trivy image scan (fail on HIGH, ignore unfixed)
         run: |
-          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.75.0
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin "${TRIVY_VERSION}"
           trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --no-progress loopworker:smoke
 
   # ------------------------------------------------------ attribution artifacts
@@ -319,3 +376,104 @@ jobs:
           path: |
             THIRD-PARTY-LICENSES/
             THIRD-PARTY-NOTICES.csv
+
+  release-sbom:
+    # `goreleaser check` validates the schema of .goreleaser.yaml and nothing
+    # else: it never invokes the tools the config names. That is how
+    # SYFT_FILE_METADATA_SELECTION=inputs survived — not a legal syft value,
+    # rejected only by syft's PostLoad hook, so every real release would have
+    # died at "cataloging artifacts" with the whole dist/ built and nothing
+    # published. Nothing ran that leg: release.yml's dry run passes
+    # --skip=...sbom... and the publish path has never executed (0 git tags).
+    # This job runs it for real, on every push and PR.
+    name: Release SBOM generation (syft, real run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install syft (invoked by the sboms block in .goreleaser.yaml)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+          syft version
+      - name: goreleaser release --snapshot, SBOM step enabled
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: ${{ env.GORELEASER_VERSION }}
+          args: release --snapshot --clean --skip=publish,sign
+      - name: SBOM accounts for every shipped file, with a real digest
+        run: |
+          python3 - <<'PY'
+          import glob, json, os, sys, tarfile, zipfile
+
+          def archive_files(path):
+              """Real (non-directory) members of the archive we are shipping.
+
+              The SBOM is checked against this set rather than against syft's own
+              fileTypes. Trusting fileTypes is exactly the trap: when syft cannot
+              read file contents (it does not on Windows) it marks every entry
+              OTHER, so a "skip directories" rule built on fileTypes skips every
+              file and the all-zero-digest check below never fires.
+              """
+              if path.endswith(".tar.gz"):
+                  with tarfile.open(path, "r:gz") as tf:
+                      return {m.name.replace("\\", "/") for m in tf.getmembers() if m.isfile()}
+              if path.endswith(".zip"):
+                  with zipfile.ZipFile(path) as zf:
+                      return {n.replace("\\", "/") for n in zf.namelist() if not n.endswith("/")}
+              sys.exit("unhandled archive type: " + path)
+
+          archives = sorted(p for p in glob.glob("dist/*")
+                            if p.endswith((".tar.gz", ".zip")))
+          if not archives:
+              sys.exit("no archives in dist/ -- the build leg did not run")
+
+          failed = False
+          for archive in archives:
+              base = os.path.basename(archive)
+              sbom = archive + ".spdx.json"
+              if not os.path.exists(sbom):
+                  print("::error::missing SBOM for %s" % base)
+                  failed = True
+                  continue
+
+              doc = json.load(open(sbom, encoding="utf-8"))
+              entries = {f["fileName"].replace("\\", "/"): f for f in doc.get("files", [])}
+              shipped = archive_files(archive)
+
+              missing, zeroed = [], []
+              for member in sorted(shipped):
+                  entry = entries.get(member)
+                  if entry is None:
+                      # syft prefixes the archive's own root dir, so match on a
+                      # path suffix as well.
+                      entry = next((e for n, e in entries.items() if n.endswith("/" + member)), None)
+                  if entry is None:
+                      missing.append(member)
+                      continue
+                  cks = entry.get("checksums", [])
+                  if not cks or any(set(c["checksumValue"]) == {"0"} for c in cks):
+                      zeroed.append(member)
+
+              if missing:
+                  print("::error::%s omits %d of the %d files in %s "
+                        "(e.g. %s) -- is SYFT_FILE_METADATA_SELECTION still `all`?"
+                        % (os.path.basename(sbom), len(missing), len(shipped), base,
+                           ", ".join(missing[:3])))
+                  failed = True
+              if zeroed:
+                  print("::error::%s reports an all-zero digest for %d file(s) "
+                        "(e.g. %s) -- syft could not read them"
+                        % (os.path.basename(sbom), len(zeroed), ", ".join(zeroed[:3])))
+                  failed = True
+              if not missing and not zeroed:
+                  print("ok: %-56s %2d/%2d shipped files, all digests real"
+                        % (os.path.basename(sbom), len(shipped), len(shipped)))
+          sys.exit(1 if failed else 0)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spdx-sboms
+          path: dist/*.spdx.json

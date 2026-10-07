@@ -55,16 +55,17 @@ its `plugin.json` declares, and a mismatch refuses that one plugin while the ser
 The default is off, because turning it on also refuses manifests that declare no digest at all —
 which is every plugin written before the field existed.
 
-Not in this release — scaffolding exists, but nothing calls it in a running server:
+Not in this release. The first three rows are scaffolding that nothing calls in a
+running server; the fourth row is different and used to be filed here wrongly:
 
 | Not shipped | Where the code is | Why it is not a feature |
 |---|---|---|
 | Signed WASM plugin provenance | `internal/core/sandbox/verify.go` `AuditWasmFile` | the auditor exists and is tested, but nothing calls it in a running server, so no manifest checksum or ABI gate is enforced at load time |
 | Plugin digest pinning | `sandbox/loader.go checkChecksums` | `verify_checksum` compares an artifact against the digest its own manifest declares; there is no allowlist of approved digests, so a manifest that lies consistently passes |
-| Distributed tracing | `internal/core/observer` | in-memory span slice, no exporter |
-| Audit logging | `pkg/security.SecurityManager` | never constructed outside tests |
+| Audit logging | `pkg/security.SecurityManager` | never constructed outside its own package's tests |
+| Distributed tracing | `internal/core/observer` | the `Observer` itself **is** wired and started (`server.go`), and feeds metrics, logs and server health. What does not ship is the tracing part: no OpenTelemetry, no span propagation, no exporter — spans stay in an in-memory slice. |
 
-See [AGENT-COLLABORATION-SPEC.md](AGENT-COLLABORATION-SPEC.md) §8.2 for what is still open.
+See `.release/SCOPE-PROPOSAL.md` ("Still open") for what is still open.
 
 ### Quick Start
 
@@ -80,7 +81,11 @@ make test
 
 # Docker deployment
 make docker
-docker run -p 19527:19527 loopworker:latest
+# The credential is required: the image listens on 0.0.0.0 and refuses to start
+# on a public interface without one. Format: id:role:<sha256-of-the-plaintext>.
+docker run -p 19527:19527 \
+  -e LOOPWORKER_API_KEYS="ops:admin:$(printf '%s' 'choose-a-real-secret' | sha256sum | cut -d' ' -f1)" \
+  loopworker:latest
 ```
 
 ### Go SDK Usage
@@ -107,22 +112,18 @@ result, _ := sb.Execute(context.Background(), "echo", []byte("hello"), skill.Ski
 
 ### CLI Tools
 
-`make build` produces all six. **Releases ship only `loopworker`** — the release archive and the
-container image contain nothing else, so the other five are developer tools you build yourself.
+`make build` produces both. **Releases ship only `loopworker`** — the release archive and the
+container image contain nothing else, so `loopctl` is a developer tool you build yourself.
 
 | Tool | What it actually does | In releases | Needs credentials |
 |------|-----------------------|-------------|-------------------|
 | `loopworker` | The server, plus `doctor` and `version` | yes | writes do |
-| `loopctl` | `task list/create/get/cancel/delete`, `workflow list/execute`, `status` | no | yes, for everything but `status` |
-| `loopdebug` | Task/workflow inspection, `diagnose`, `profile` | no | yes, for everything but `diagnose` |
-| `loopwatch` | `GET /api/v1/health` only | no | no |
-| `loopbench` | Local `time.Sleep` loop — never contacts a server | no | n/a |
-| `loopsim` | Local `rand` + `time.Sleep` loop — never contacts a server | no | n/a |
+| `loopctl` | `task list/create/get/cancel/delete`, `workflow list/get/execute`, `status` | no | yes, for everything but `status` |
 
-`loopwatch --metrics` and `--logs` do not work: `/api/v1/metrics` and `/api/v1/logs` are not
-routes. Metrics and logs live on the loopback admin listener on `server.admin_port` (default
-19528) and need admin credentials — see [API Endpoints](#api-endpoints). `loopbench` and
-`loopsim` report numbers about their own sleep loops; do not quote them as product performance.
+Four other developer CLIs (`loopdebug`, `loopwatch`, `loopbench`, `loopsim`) were **deleted**.
+They were not built into any release artifact, none had a test, and `loopbench`/`loopsim`
+reported numbers about their own `time.Sleep` loops rather than about the product. Do not
+quote their numbers as performance; `CHANGELOG.md` under "Removed" records the reasoning.
 
 All credentialed commands read `LOOPWORKER_API_KEY`.
 
@@ -133,10 +134,6 @@ loopWorker-for-go/
 ├── cmd/                    # CLI tools
 │   ├── loopworker/         # Main server
 │   ├── loopctl/            # Task & workflow management CLI
-│   ├── loopbench/          # Performance benchmarking
-│   ├── loopwatch/          # Real-time monitoring
-│   ├── loopsim/            # Load simulation
-│   └── loopdebug/          # Debugging & diagnostics
 ├── pkg/                    # Public packages
 │   ├── api/                # REST API
 │   ├── event/              # Event system
@@ -303,16 +300,17 @@ manifest 同样不能扩大宿主配置的 `allowed_hosts` —— 实际出网�
 因为上限是共享的，一个插件吃满 256 MB 仍会影响同一沙箱内的其他插件。
 **manifest 的校验和在加载时不做验证。**
 
-本版本**不含**以下能力——代码存在，但运行中的服务里没有任何地方调用：
+本版本**不含**以下能力。前三行是代码存在但运行中的服务里没有任何调用的脚手架；
+第四行不同，此前归错类：
 
 | 未交付 | 代码位置 | 原因 |
 |---|---|---|
 | WASM 产物签名溯源 | `internal/core/sandbox/verify.go` 的 `AuditWasmFile` | 审计器存在且有测试，但运行中的服务器没有任何调用方，所以加载时不强制 manifest 校验和与 ABI 闸门 |
 | 插件摘要固定 | `sandbox/loader.go checkChecksums` | `verify_checksum` 只把产物和它自己 manifest 声明的摘要比对，没有可信摘要白名单，所以一份「一致地说谎」的 manifest 仍能通过 |
-| 分布式追踪 | `internal/core/observer` | 只写内存切片，无 exporter |
-| 审计日志 | `pkg/security.SecurityManager` | 除测试外从未构造 |
+| 审计日志 | `pkg/security.SecurityManager` | 除它自己包的测试外从未构造 |
+| 分布式追踪 | `internal/core/observer` | `Observer` 本身**已接线并启动**（`server.go`），并参与指标、日志与服务器健康检查。没交付的是追踪本身：没有 OpenTelemetry、没有 span 传播、没有 exporter，span 只留在内存切片里 |
 
-仍未闭合的项见 [AGENT-COLLABORATION-SPEC.md](AGENT-COLLABORATION-SPEC.md) §8.2。
+仍未闭合的项见 `.release/SCOPE-PROPOSAL.md` 的 “Still open”。
 
 ### 快速开始
 
@@ -328,7 +326,11 @@ make test
 
 # Docker部署
 make docker
-docker run -p 19527:19527 loopworker:latest
+# 凭据是必需的：镜像监听 0.0.0.0，未配置凭据时服务会拒绝在公网接口启动并直接退出。
+# 格式：id:role:<明文的 sha256>
+docker run -p 19527:19527 \
+  -e LOOPWORKER_API_KEYS="ops:admin:$(printf '%s' 'choose-a-real-secret' | sha256sum | cut -d' ' -f1)" \
+  loopworker:latest
 ```
 
 ### Go SDK 使用
@@ -355,25 +357,17 @@ result, _ := sb.Execute(context.Background(), "echo", []byte("hello"), skill.Ski
 
 ### 命令行工具
 
-| 工具 | 说明 | 版本 |
-|------|------|------|
-| `loopworker` | 主服务器 | `loopworker version` |
-`make build` 会构建全部六个工具，但**发布产物只含 `loopworker`** —— release 归档与容器镜像里
-没有其他五个，其余五个是你需要自己 `make build` 的开发者工具。
+`make build` 会构建这两个工具，但**发布产物只含 `loopworker`** —— release 归档与容器镜像里
+没有 `loopctl`，它是你需要自己 `make build` 的开发者工具。
 
 | 工具 | 实际做的事 | 在发布产物里 | 需要凭据 |
 |------|-----------|-------------|---------|
 | `loopworker` | 服务器本体，外加 `doctor` 与 `version` | 是 | 写操作需要 |
-| `loopctl` | `task list/create/get/cancel/delete`、`workflow list/execute`、`status` | 否 | 除 `status` 外都需要 |
-| `loopdebug` | 任务/工作流查看、`diagnose`、`profile` | 否 | 除 `diagnose` 外都需要 |
-| `loopwatch` | 只发 `GET /api/v1/health` | 否 | 不需要 |
-| `loopbench` | 本地 `time.Sleep` 循环，从不连服务器 | 否 | 不适用 |
-| `loopsim` | 本地 `rand` + `time.Sleep` 循环，从不连服务器 | 否 | 不适用 |
+| `loopctl` | `task list/create/get/cancel/delete`、`workflow list/get/execute`、`status` | 否 | 除 `status` 外都需要 |
 
-`loopwatch --metrics` 与 `--logs` 不可用：`/api/v1/metrics` 与 `/api/v1/logs` 并不是路由。
-指标与日志在 `server.admin_port`（默认 19528）的 loopback admin 监听器上，且需要 admin
-凭据 —— 见 [API端点](#api端点)。`loopbench` 与 `loopsim` 报的是它们自己 sleep 循环的数字，
-不要当作产品性能引用。
+另外四个开发者工具（`loopdebug`、`loopwatch`、`loopbench`、`loopsim`）已**删除**。
+它们从未进入任何发布产物，都没有测试，而 `loopbench` / `loopsim` 报的是它们自己
+`time.Sleep` 循环的数字而非产品性能。`CHANGELOG.md` 的 "Removed" 一节记录了删除理由。
 
 所有需要凭据的命令都读 `LOOPWORKER_API_KEY`。
 
@@ -384,10 +378,6 @@ loopWorker-for-go/
 ├── cmd/                    # 命令行工具
 │   ├── loopworker/         # 主服务器
 │   ├── loopctl/            # 任务管理CLI
-│   ├── loopbench/          # 性能基准测试
-│   ├── loopwatch/          # 实时监控
-│   ├── loopsim/            # 负载模拟
-│   └── loopdebug/          # 调试工具
 ├── pkg/                    # 公共包
 │   ├── api/                # REST API
 │   ├── event/              # 事件系统

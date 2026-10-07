@@ -433,6 +433,69 @@ func TestWorkflowListWithoutTheWorkflowEngine(t *testing.T) {
 	}
 }
 
+// --- workflow get ---------------------------------------------------------
+
+// The route GET /api/v1/workflow/{workflowID} has been registered all along.
+// loopctl never called it, so a workflow could only be read with curl — the
+// exact "how do I read this?" ticket a self-service product must not generate.
+func TestWorkflowGetPrintsTheWorkflow(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		success(t, w, http.StatusOK, map[string]any{
+			"id": "wf1", "name": "nightly", "status": "pending",
+		})
+	}))
+	defer srv.Close()
+
+	out, err := runCLI(t, "--server", srv.URL, "workflow", "get", "wf1")
+	if err != nil {
+		t.Fatalf("workflow get failed: %v", err)
+	}
+	if gotPath != "/api/v1/workflow/wf1" {
+		t.Errorf("workflow get requested %q, want /api/v1/workflow/wf1", gotPath)
+	}
+	printed := printedObject(t, out)
+	if printed["id"] != "wf1" || printed["name"] != "nightly" {
+		t.Fatalf("workflow get printed %v, want the workflow the server returned", printed)
+	}
+}
+
+// A miss must be an error, not an empty success: "the CLI said nothing wrong"
+// is how an id typo becomes an unanswered ticket.
+func TestWorkflowGetNotFoundIsReported(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		failure(t, w, http.StatusNotFound, "WORKFLOW_NOT_FOUND", "no workflow named \"typo\" is registered in this process")
+	}))
+	defer srv.Close()
+
+	_, err := runCLI(t, "--server", srv.URL, "workflow", "get", "typo")
+	if err == nil {
+		t.Fatal("workflow get for an unknown id returned no error")
+	}
+	for _, want := range []string{"get workflow", "404", "WORKFLOW_NOT_FOUND"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error is missing %q:\n%v", want, err)
+		}
+	}
+}
+
+// Help text is the first thing a customer reads. It used to promise "create"
+// (deliberately absent) and "get" (missing until now). Help that names a
+// command the binary does not have is a ticket in itself.
+func TestWorkflowHelpPromisesOnlyCommandsThatExist(t *testing.T) {
+	out, err := runCLI(t, "workflow", "--help")
+	if err != nil {
+		t.Fatalf("workflow --help failed: %v", err)
+	}
+	if !strings.Contains(out, "get") {
+		t.Errorf("workflow help does not mention the get command it registers:\n%s", out)
+	}
+	if strings.Contains(out, "create") {
+		t.Errorf("workflow help promises create, which is deliberately absent:\n%s", out)
+	}
+}
+
 // --- workflow execute -----------------------------------------------------
 
 // TestWorkflowExecuteNeverSendsTheInputFlag pins the reason the -i flag is

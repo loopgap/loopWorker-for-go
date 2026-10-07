@@ -67,9 +67,12 @@ Types: `feat` `fix` `docs` `style` `refactor` `test` `chore` `build` `ci` `rever
 
 ### Prerequisites
 
-* **Go, exactly the version in `go.mod`** (`go 1.26.1`). CI derives its
+* **Go, exactly the version in `go.mod`** (`go 1.26.6`). CI derives its
   toolchain from go.mod (`go-version-file: go.mod`) and `relcheck` fails if the
   Dockerfile or any workflow disagrees — do not hardcode a Go version anywhere.
+* Node >= 24 and npm, **only** if you touch `web/canvas`. Everything else in this
+  repository builds with Go alone: `pkg/api/dist` is a committed build artifact
+  and the server embeds it with `//go:embed all:dist`.
 * Git.
 * Optional, needed to run the whole gate locally:
   `golangci-lint` v2.9.0, `govulncheck` v1.8.0, `goreleaser` v2.9.0, Docker.
@@ -129,6 +132,20 @@ suffix-less `bin\loopworker` that Windows cannot execute.
   layout) needs a smoke-test assertion in `.release/scripts/boot-smoke.sh`,
   `.release/smoke.ps1` or `.release/scripts/docker-smoke.sh`. That is how this
   project stays support-free.
+* Canvas changes need a test in `web/canvas/src/*.test.js(x)`, next to the code
+  it covers. Run `npm --prefix web/canvas test`. The `canvas` CI job runs it;
+  do not assume the Go suite covers the GUI, because it does not and never did.
+  Check a new test actually fails: put the defect back, watch it go red, then
+  restore. A test that has never been seen to fail proves nothing.
+* Some tests compile real WebAssembly while they run, so a `go` binary has to be
+  on `PATH`: `internal/core/sandbox` builds genuine WASI modules on demand rather
+  than loading a checked-in binary, because a committed `.wasm` cannot be kept in
+  sync with the source that produced it and a stale one quietly stops testing
+  anything. Two artifacts *are* committed, because they ship:
+  `examples/hello-plugin/hello.wasm` (in the release archive) and
+  `pkg/plugin/testdata/hello.wasm` (what `pkg/plugin` executes). They must stay
+  byte-identical — `pkg/plugin/artifact_test.go` says so and explains how to
+  regenerate them.
 
 ## Documentation
 
@@ -172,3 +189,38 @@ artifacts must be pulled, not patched quietly.
 
 Open an issue with a minimal reproducible example. There is no support channel
 by design — see `SUPPORT.md` for what is and is not answered.
+
+## Rebuilding the embedded web canvas
+
+`pkg/api/dist` is a build artifact committed to the repository on purpose: the
+server embeds it with `//go:embed all:dist`, so a release binary needs no Node
+toolchain and CI needs no frontend build. Rebuild it only when you change
+anything under `web/canvas/src`.
+
+```bash
+cd web/canvas
+npm ci
+npm test               # run them before you build
+npm run build
+cd ../..
+mkdir -p pkg/api/dist && cp -r web/canvas/dist/. pkg/api/dist/
+diff -r web/canvas/dist pkg/api/dist    # must be empty
+ls pkg/api/dist/assets/index-*.js pkg/api/dist/assets/index-*.css   # one of each; delete leftovers
+rm -rf web/canvas/node_modules web/canvas/dist
+go build ./... && go test ./pkg/api/
+```
+
+Clear out the stale hashed assets after the new ones are in place. The embed
+directive takes every file in the directory, so a stale `index-<hash>.js` left
+behind by a previous build is embedded into the binary and shipped to
+customers. Copy first and delete second - emptying the directory first breaks
+`//go:embed all:dist` for anything compiling concurrently.
+
+## Keeping the tree clean
+
+- Scratch files, verification output and throwaway binaries go in `_scratch/`,
+  which is git-ignored. Nowhere else.
+- `web/canvas/node_modules` and `web/canvas/dist` are build leftovers; remove
+  them when you are done building (see above).
+- Before committing, `git status --ignored` must not list a runtime leftover
+  anywhere except `_scratch/`.

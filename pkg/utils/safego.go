@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
+
 	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/logger"
 )
@@ -29,9 +29,6 @@ func (l *DefaultLogger) Printf(format string, v ...interface{}) {
 // globalLogger 使用atomic.Value实现并发安全的全局logger
 var globalLogger atomic.Value
 
-// loggerOnce 确保默认logger只初始化一次
-var loggerOnce sync.Once
-
 func init() {
 	// 初始化默认logger（使用指针类型）
 	var defaultLogger Logger = &DefaultLogger{}
@@ -47,7 +44,11 @@ func SetLogger(l Logger) {
 
 // getLogger 获取当前logger（并发安全）
 func getLogger() Logger {
-	return *globalLogger.Load().(*Logger)
+	if l, ok := globalLogger.Load().(*Logger); ok && l != nil {
+		return *l
+	}
+	var fallback Logger = &DefaultLogger{}
+	return fallback
 }
 
 // PanicError reports a panic that was recovered by a guarded goroutine.

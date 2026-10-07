@@ -48,6 +48,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
 	"loopworker/pkg/event"
 	"loopworker/pkg/logger"
 	"loopworker/pkg/skill"
@@ -325,7 +326,7 @@ func (s *Sandbox) UnloadPluginContext(ctx context.Context, name string) error {
 	// closing a runtime under a live call would fail that call.
 	entry.markRemoved()
 	if err := entry.wait(ctx); err != nil {
-		return fmt.Errorf("%w: unload %s: %v", lwerrors.ErrPluginFailed, name, err)
+		return fmt.Errorf("%w: unload %s: %w", lwerrors.ErrPluginFailed, name, err)
 	}
 
 	if closer, ok := entry.plugin.(Closer); ok {

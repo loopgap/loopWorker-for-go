@@ -51,10 +51,6 @@ type LoadOptions struct {
 	MaxMemoryMB int
 	// RequireChecksum makes a manifest sha256 mandatory.
 	RequireChecksum bool
-	// Allowlist pins digests by plugin name. When non-nil, a plugin must appear
-	// in it and its artifact digest must match, so nothing that was not pinned
-	// can ever execute.
-	Allowlist map[string]string
 }
 
 // DefaultLoadOptions returns the conservative defaults: 128 MiB artifacts and a
@@ -86,7 +82,7 @@ func (o LoadOptions) withDefaults() LoadOptions {
 // Verification, in order: manifest parses; artifact path stays inside the
 // plugin directory (no path traversal); artifact size is within
 // MaxArtifactBytes; the wasm magic preamble is present; the digest matches the
-// manifest and/or the allowlist; the module's declared imports and entrypoint
+// manifest; the module's declared imports and entrypoint
 // are ones this host supports; its memory request fits the per-plugin limit.
 //
 // Every rejection is a typed error: ErrArtifactMissing, ErrArtifactTooLarge,
@@ -218,7 +214,9 @@ func readWasmManifest(dir string) (*WasmManifest, error) {
 
 	var manifest WasmManifest
 	if err := json.Unmarshal(raw, &manifest); err != nil {
-		return nil, fmt.Errorf("%w: %s: %v", ErrManifestInvalid, path, err)
+		// %w on both: the retry classifier asks errors.Is about the decode
+		// failure itself, not only about the manifest verdict wrapping it.
+		return nil, fmt.Errorf("%w: %s: %w", ErrManifestInvalid, path, err)
 	}
 
 	if manifest.Name == "" {
@@ -281,17 +279,6 @@ func VerifyArtifactDigest(name, declared string, data []byte, require bool) erro
 func checkChecksums(manifest *WasmManifest, data []byte, opts LoadOptions) error {
 	sum := sha256.Sum256(data)
 	digest := hex.EncodeToString(sum[:])
-
-	if opts.Allowlist != nil {
-		pinned, ok := opts.Allowlist[manifest.Name]
-		if !ok {
-			return fmt.Errorf("%w: plugin %q is not in the allowlist", ErrChecksumMismatch, manifest.Name)
-		}
-		if !matchesSHA256(pinned, sum[:]) {
-			return fmt.Errorf("%w: plugin %q digest %s does not match allowlist", ErrChecksumMismatch, manifest.Name, digest)
-		}
-		return nil
-	}
 
 	if manifest.SHA256 == "" {
 		if opts.RequireChecksum {

@@ -209,7 +209,7 @@ func AuditWasmBytes(path string, data []byte, opts AuditOptions) (*AuditReport, 
 		return report, nil
 	}
 
-	attempted, probeErr, elapsed, exitCode := probeWasm(context.Background(), data, sum.exports, opts)
+	attempted, elapsed, exitCode, probeErr := probeWasm(context.Background(), data, sum.exports, opts)
 	report.ProbeRan = true
 	report.ProbeMillis = elapsed.Milliseconds()
 	report.ProbeExitCode = exitCode
@@ -313,10 +313,10 @@ var (
 // probeWasm runs the artifact under a bounded budget with no egress: the host
 // functions it calls are stubs that record requests and fail. It reports the
 // URLs the module asked for.
-func probeWasm(ctx context.Context, data []byte, exports []string, opts AuditOptions) (attempted []string, err error, elapsed time.Duration, exitCode uint32) {
+func probeWasm(ctx context.Context, data []byte, exports []string, opts AuditOptions) (attempted []string, elapsed time.Duration, exitCode uint32, err error) {
 	pages, limitErr := memoryPages(opts.MemoryMB)
 	if limitErr != nil {
-		return nil, limitErr, 0, 0
+		return nil, 0, 0, limitErr
 	}
 
 	// Host functions run on the goroutine that invoked the module, so a plain
@@ -331,8 +331,9 @@ func probeWasm(ctx context.Context, data []byte, exports []string, opts AuditOpt
 		EgressProbe:  recorder,
 	})
 	if err != nil {
-		return nil, err, 0, 0
+		return nil, 0, 0, err
 	}
+	//nolint:contextcheck // the probe's own context may already be spent, and the runtime has to be closed either way
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
@@ -341,7 +342,7 @@ func probeWasm(ctx context.Context, data []byte, exports []string, opts AuditOpt
 
 	compiled, err := rt.CompileModule(ctx, data)
 	if err != nil {
-		return nil, fmt.Errorf("compile: %w", err), 0, 0
+		return nil, 0, 0, fmt.Errorf("compile: %w", err)
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(opts.MaxCPUSeconds)*time.Second)
@@ -359,13 +360,14 @@ func probeWasm(ctx context.Context, data []byte, exports []string, opts AuditOpt
 	elapsed = time.Since(start)
 
 	if mod != nil {
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), shutdownGrace)
+		closeCtx, closeCloseCancel := context.WithTimeout(context.Background(), shutdownGrace)
+		//nolint:contextcheck // same reason as the runtime close above
 		_ = mod.Close(closeCtx)
-		closeCancel()
+		closeCloseCancel()
 	}
 
 	if stdout.didOverflow() {
-		return attempted, fmt.Errorf("%w: max %d MB", errProbeBudget, opts.MaxOutputMB), elapsed, 0
+		return attempted, elapsed, 0, fmt.Errorf("%w: max %d MB", errProbeBudget, opts.MaxOutputMB)
 	}
 
 	var exitErr *sys.ExitError
@@ -373,22 +375,22 @@ func probeWasm(ctx context.Context, data []byte, exports []string, opts AuditOpt
 		exitCode = exitErr.ExitCode()
 		switch exitCode {
 		case sys.ExitCodeDeadlineExceeded:
-			return attempted, fmt.Errorf("%w: after %d seconds", errProbeBudget, opts.MaxCPUSeconds), elapsed, exitCode
+			return attempted, elapsed, exitCode, fmt.Errorf("%w: after %d seconds", errProbeBudget, opts.MaxCPUSeconds)
 		case sys.ExitCodeContextCanceled:
 			if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
-				return attempted, fmt.Errorf("%w: after %d seconds", errProbeBudget, opts.MaxCPUSeconds), elapsed, exitCode
+				return attempted, elapsed, exitCode, fmt.Errorf("%w: after %d seconds", errProbeBudget, opts.MaxCPUSeconds)
 			}
-			return attempted, context.Canceled, elapsed, exitCode
+			return attempted, elapsed, exitCode, context.Canceled
 		case 0:
-			return attempted, errProbeCleanExit, elapsed, 0
+			return attempted, elapsed, 0, errProbeCleanExit
 		}
-		return attempted, fmt.Errorf("wasm exited with code %d: %w", exitCode, instErr), elapsed, exitCode
+		return attempted, elapsed, exitCode, fmt.Errorf("wasm exited with code %d: %w", exitCode, instErr)
 	}
 	if instErr != nil {
-		return attempted, instErr, elapsed, exitCode
+		return attempted, elapsed, exitCode, instErr
 	}
 
-	return attempted, nil, elapsed, 0
+	return attempted, elapsed, 0, nil
 }
 
 // staticSummary is what the pure decoder learns about an artifact.
@@ -419,7 +421,7 @@ func inspect(data []byte) (*staticSummary, error) {
 	for r.offset < len(r.buf) {
 		sectionID, err := r.readSectionHeader()
 		if err != nil {
-			return sum, fmt.Errorf("%w: malformed wasm section: %v", ErrArtifactBadMagic, err)
+			return sum, fmt.Errorf("%w: malformed wasm section: %w", ErrArtifactBadMagic, err)
 		}
 		body := r.sectionBody()
 
@@ -427,13 +429,13 @@ func inspect(data []byte) (*staticSummary, error) {
 		case sectionImport:
 			imports, err := decodeImports(body)
 			if err != nil {
-				return sum, fmt.Errorf("%w: import section: %v", ErrArtifactBadMagic, err)
+				return sum, fmt.Errorf("%w: import section: %w", ErrArtifactBadMagic, err)
 			}
 			sum.imports = append(sum.imports, imports...)
 		case sectionMemory:
 			minPages, maxPages, bounded, err := decodeMemorySection(body)
 			if err != nil {
-				return sum, fmt.Errorf("%w: memory section: %v", ErrArtifactBadMagic, err)
+				return sum, fmt.Errorf("%w: memory section: %w", ErrArtifactBadMagic, err)
 			}
 			if minPages > sum.minPages {
 				sum.minPages = minPages
@@ -447,7 +449,7 @@ func inspect(data []byte) (*staticSummary, error) {
 		case sectionExport:
 			names, err := decodeExports(body)
 			if err != nil {
-				return sum, fmt.Errorf("%w: export section: %v", ErrArtifactBadMagic, err)
+				return sum, fmt.Errorf("%w: export section: %w", ErrArtifactBadMagic, err)
 			}
 			sum.exports = append(sum.exports, names...)
 		case sectionStart:

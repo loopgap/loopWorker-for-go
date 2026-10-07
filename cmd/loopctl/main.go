@@ -174,7 +174,11 @@ var taskDeleteCmd = &cobra.Command{
 var workflowCmd = &cobra.Command{
 	Use:   "workflow",
 	Short: "Workflow management commands",
-	Long:  "Commands for managing workflows: create, list, get, execute.",
+	// This string is customer-facing help text. It used to advertise "create"
+	// and "get": create is deliberately absent (see the package comment above)
+	// and get was missing while the route it wraps has been registered all
+	// along. Help that names a command the binary does not have is a ticket.
+	Long: "Commands for managing workflows: list, get, execute.",
 }
 
 var workflowListCmd = &cobra.Command{
@@ -228,6 +232,29 @@ var workflowExecuteCmd = &cobra.Command{
 	},
 }
 
+var workflowGetCmd = &cobra.Command{
+	Use:   "get [workflow-id]",
+	Short: "Get workflow details",
+	Long:  "Get detailed information about a single registered workflow.",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		workflowID := args[0]
+
+		wf, err := apiClient.GetWorkflow(workflowID)
+		if err != nil {
+			return fmt.Errorf("get workflow: %w", err)
+		}
+
+		jsonData, err := json.MarshalIndent(wf, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal workflow: %w", err)
+		}
+
+		fmt.Println(string(jsonData))
+		return nil
+	},
+}
+
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show server status",
@@ -268,7 +295,7 @@ func init() {
 
 	// Add subcommands
 	taskCmd.AddCommand(taskListCmd, taskCreateCmd, taskGetCmd, taskCancelCmd, taskDeleteCmd)
-	workflowCmd.AddCommand(workflowListCmd, workflowExecuteCmd)
+	workflowCmd.AddCommand(workflowListCmd, workflowGetCmd, workflowExecuteCmd)
 
 	rootCmd.AddCommand(taskCmd, workflowCmd, statusCmd)
 

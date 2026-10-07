@@ -242,6 +242,68 @@ func (w *Workflow) GetState(key string) (interface{}, bool) {
 	return val, ok
 }
 
+// StepIDs returns a snapshot of the registered step ids in registration order.
+// Callers that iterate steps while a run may still be adding them must read
+// through this, not the StepOrder field: AddStep appends to that slice under mu
+// and a bare read of it is a data race.
+func (w *Workflow) StepIDs() []string {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	out := make([]string, len(w.StepOrder))
+	copy(out, w.StepOrder)
+	return out
+}
+
+// Step returns the registered step, or nil when no step has that id. Same
+// reasoning as StepIDs: the Steps map is written by AddStep under mu.
+func (w *Workflow) Step(id string) *Step {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.Steps[id]
+}
+
+// SetStepStatus records a step's status under the same lock AddStep uses. Every
+// writer of StepStatus outside this method is a potential race with AddStep.
+func (w *Workflow) SetStepStatus(stepID string, status StepStatus) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.StepStatus == nil {
+		w.StepStatus = make(map[string]StepStatus)
+	}
+	w.StepStatus[stepID] = status
+}
+
+// StateSnapshot returns a shallow copy of the shared state map.
+//
+// A step's Action receives this copy rather than the live map. The map was
+// previously handed over by reference while two different mutexes guarded it,
+// which could kill the process with "concurrent map writes". The copy keeps the
+// documented contract intact: a step reads the state as it was when it started
+// and returns an incremental result, which MergeState folds in. It is shallow,
+// so nested values are still shared - exactly as SetState's merges were.
+func (w *Workflow) StateSnapshot() map[string]interface{} {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	out := make(map[string]interface{}, len(w.State))
+	for k, v := range w.State {
+		out[k] = v
+	}
+	return out
+}
+
+// MergeState folds a step's result into the shared state under the lock
+// SetState uses, so one mutex governs one map.
+func (w *Workflow) MergeState(result map[string]interface{}) {
+	if len(result) == 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for k, v := range result {
+		w.State[k] = v
+	}
+}
+
 func (we *WorkflowEngine) Register(workflow *Workflow) {
 	we.mu.Lock()
 	defer we.mu.Unlock()
@@ -319,7 +381,11 @@ func (we *WorkflowEngine) executeWorkflow(ctx context.Context, workflow *Workflo
 		default:
 		}
 
+		// AddStep is exported and takes no execMu, so a caller can add a step
+		// while a run is in flight; read Steps under the lock that AddStep writes it.
+		workflow.mu.RLock()
 		step := workflow.Steps[stepID]
+		workflow.mu.RUnlock()
 
 		// Verify all dependencies completed successfully
 		if !we.checkDependencies(workflow, step) {
@@ -434,10 +500,16 @@ func (we *WorkflowEngine) computeExecutionOrder(workflow *Workflow) ([]string, e
 	return sorted, nil
 }
 
+// checkDependencies reports whether every step this one depends on completed.
+//
+// StepStatus is read through GetStepStatus, not directly: AddStep writes the same
+// map under w.mu and takes no execMu, so a step registered while this run is in
+// flight makes a bare map read a data race. A dependency that is not in the map
+// reads back as the zero value StepPending, which is not StepCompleted, so the
+// "missing" and "not completed" cases collapse into one comparison.
 func (we *WorkflowEngine) checkDependencies(workflow *Workflow, step *Step) bool {
 	for _, depID := range step.DependsOn {
-		status, exists := workflow.StepStatus[depID]
-		if !exists || status != StepCompleted {
+		if workflow.GetStepStatus(depID) != StepCompleted {
 			return false
 		}
 	}
@@ -683,6 +755,15 @@ func NewParallelWorkflow(id, name string, maxConcurrency int) *ParallelWorkflow 
 	}
 }
 
+// ExecuteParallel runs every step whose dependencies are met, bounded by
+// maxConcurrency.
+//
+// Locking rule for this function: completedMu guards the local completed map,
+// and mu (via the Workflow accessors) guards the workflow's own maps. The two
+// are never held at the same time. This function is called only from the
+// coordinating goroutine below - once before the wait loop and once per
+// completed step - so deciding what to launch and then marking those steps
+// running can safely happen in two phases.
 func (pw *ParallelWorkflow) ExecuteParallel(ctx context.Context) error {
 	pw.mu.Lock()
 	pw.Status = WorkflowRunning
@@ -690,30 +771,37 @@ func (pw *ParallelWorkflow) ExecuteParallel(ctx context.Context) error {
 	pw.StartedAt = &now
 	pw.mu.Unlock()
 
+	// Snapshot the plan once. A step registered while this run is in flight is
+	// not part of this run: totalSteps is fixed from here, so the wait loop has
+	// a bound it cannot drift away from.
+	order := pw.StepIDs()
+	totalSteps := len(order)
+
 	sem := make(chan struct{}, pw.maxConcurrency)
 	errChan := make(chan error, 1)
-	doneChan := make(chan string, len(pw.StepOrder))
+	doneChan := make(chan string, len(order))
 
-	// Track completed steps
 	completed := make(map[string]bool)
+	launched := make(map[string]bool)
 	var completedMu sync.Mutex
-	totalSteps := len(pw.StepOrder)
 
-	// Launch all steps that have their dependencies met
 	launchReady := func() {
+		// Phase 1 - decide, holding only completedMu. Nothing here touches the
+		// workflow's own maps except through the accessors, which take mu
+		// briefly and never while completedMu is held by another goroutine.
+		var toLaunch []*Step
 		completedMu.Lock()
-		defer completedMu.Unlock()
-
-		for _, stepID := range pw.StepOrder {
-			step := pw.Steps[stepID]
-			status := pw.StepStatus[stepID]
-
-			// Skip if already started/completed/failed/skipped
-			if status != StepPending {
+		for _, stepID := range order {
+			if launched[stepID] {
 				continue
 			}
-
-			// Check if all dependencies are completed
+			step := pw.Step(stepID)
+			if step == nil {
+				continue
+			}
+			if pw.GetStepStatus(stepID) != StepPending {
+				continue
+			}
 			allDepsDone := true
 			for _, depID := range step.DependsOn {
 				if !completed[depID] {
@@ -721,25 +809,28 @@ func (pw *ParallelWorkflow) ExecuteParallel(ctx context.Context) error {
 					break
 				}
 			}
-
 			if !allDepsDone {
 				continue
 			}
+			launched[stepID] = true
+			toLaunch = append(toLaunch, step)
+		}
+		completedMu.Unlock()
 
-			// Mark as running to prevent double-launch
-			pw.StepStatus[stepID] = StepRunning
-
-			// Launch step in goroutine
+		// Phase 2 - start them. completedMu is released, so SetStepStatus is free
+		// to take mu without any lock-ordering hazard.
+		for _, step := range toLaunch {
+			pw.SetStepStatus(step.ID, StepRunning)
 			stepCopy := step
 			utils.GoSafe(ctx, func(innerCtx context.Context) {
 				sem <- struct{}{} // acquire concurrency slot
 				defer func() { <-sem }()
 
-				result, err := stepCopy.Action(innerCtx, pw.State)
+				// A snapshot, not the live map: this read happens while other
+				// steps are running and SetState may be writing.
+				result, err := stepCopy.Action(innerCtx, pw.StateSnapshot())
 				if err != nil {
-					completedMu.Lock()
-					pw.StepStatus[stepCopy.ID] = StepFailed
-					completedMu.Unlock()
+					pw.SetStepStatus(stepCopy.ID, StepFailed)
 					select {
 					case errChan <- fmt.Errorf("step %s: %w", stepCopy.ID, err):
 					default:
@@ -747,11 +838,10 @@ func (pw *ParallelWorkflow) ExecuteParallel(ctx context.Context) error {
 					return
 				}
 
+				pw.MergeState(result)
+				pw.SetStepStatus(stepCopy.ID, StepCompleted)
+
 				completedMu.Lock()
-				for k, v := range result {
-					pw.State[k] = v
-				}
-				pw.StepStatus[stepCopy.ID] = StepCompleted
 				completed[stepCopy.ID] = true
 				completedMu.Unlock()
 

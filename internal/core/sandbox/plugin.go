@@ -12,6 +12,7 @@ import (
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/sys"
+
 	"loopworker/pkg/skill"
 
 	lwerrors "loopworker/pkg/errors"
@@ -270,6 +271,7 @@ func (p *WasmPlugin) ExecuteWithOutputLimit(ctx context.Context, input []byte, _
 		WithName(moduleName))
 	if mod != nil {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), shutdownGrace)
+		//nolint:contextcheck // the caller's context is usually already spent, and a close that inherited it would be skipped
 		_ = mod.Close(closeCtx)
 		closeCancel()
 	}
@@ -299,7 +301,7 @@ func (p *WasmPlugin) classify(callCtx context.Context, err error) error {
 			if cause := callCtx.Err(); cause != nil {
 				return cause
 			}
-			return fmt.Errorf("%w: %v", lwerrors.ErrTaskCancelled, err)
+			return fmt.Errorf("%w: %w", lwerrors.ErrTaskCancelled, err)
 		}
 		// A non-zero exit or a trap is a deterministic crash: report it as one
 		// so callers do not retry it and operators do not read it as a timeout.

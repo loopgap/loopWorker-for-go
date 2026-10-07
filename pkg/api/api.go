@@ -9,9 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"loopworker/version"
 	"sync"
 	"time"
+
+	"loopworker/version"
 
 	"github.com/go-chi/chi/v5"
 
@@ -108,7 +109,13 @@ func NewAPIServerWithDependencies(deps Dependencies, opts ...Option) *APIServer 
 	} else {
 		auth.SetFailureWriter(failureWriter)
 		server.auth = auth
-		logBootstrapCredential(auth)
+		if cfg.LocalTrust {
+			// Announcing a bootstrap key here would be actively misleading: in
+			// trust mode no credential is consulted on the public listener.
+			logLocalTrust()
+		} else {
+			logBootstrapCredential(auth)
+		}
 	}
 
 	server.Router = chi.NewRouter()
@@ -118,6 +125,14 @@ func NewAPIServerWithDependencies(deps Dependencies, opts ...Option) *APIServer 
 
 // ConfigError reports why the server refused to accept credentials, if any.
 func (s *APIServer) ConfigError() error { return s.configError }
+
+// SetAdminControl installs the lifecycle handlers after construction.
+//
+// The host needs this rather than WithAdminControl because NewAPIServer runs
+// while the components are being built, before the host has a Server value to
+// borrow the handlers from. It must be called before StartAdmin, which builds
+// the admin router once.
+func (s *APIServer) SetAdminControl(c AdminControl) { s.cfg.AdminControl = c }
 
 // Authenticator exposes the wired authenticator for the admin listener.
 func (s *APIServer) Authenticator() *security.Authenticator { return s.auth }
@@ -152,7 +167,9 @@ func (s *APIServer) blockConfigError() func(http.Handler) http.Handler {
 func (s *APIServer) registerRoutes() {
 	bundle := &middlewareBundle{auth: s.auth, limits: s.limits, cfg: s.cfg, streams: s.streams}
 
-	// Public listener: no prometheus registry, no runtime stats.
+	// Public listener: the versioned API, the canvas, and the liveness probe.
+	// Runtime statistics and the lifecycle endpoints live on the admin listener,
+	// which binds to loopback and requires the admin permission.
 	s.Router.Use(securityHeaders)
 	s.Router.Use(bundle.cors)
 	s.Router.Use(bundle.requestID)
@@ -276,7 +293,7 @@ func (s *APIServer) staticHandler() http.HandlerFunc {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
 			w.WriteHeader(http.StatusOK)
-			w.Write(canvasIndex)
+			_, _ = w.Write(canvasIndex)
 			return
 		}
 		r.URL.Path = "/dist" + r.URL.Path

@@ -144,9 +144,22 @@ archives:
       - SUPPORT.md
       - SECURITY.md
       - docs/QUICKSTART.md
+      - docs/USAGE.md
       - docs/api/api-reference.md
       - src: config/config.example.yaml
         strip_parent: true
+        info:
+          mode: 0o644
+      # The example plugin. QUICKSTART section 2 is the first thing a new user
+      # does, and it copies this directory into ~/.loopworker/plugins. Shipping
+      # the docs without it made every tarball-only install dead on arrival:
+      # the instructions build ./examples/hello-plugin, which is not in the
+      # archive. It is byte-identical to pkg/plugin/testdata/hello.wasm, which
+      # the test suite executes in a real WASM runtime.
+      - src: examples/hello-plugin/plugin.json
+        info:
+          mode: 0o644
+      - src: examples/hello-plugin/hello.wasm
         info:
           mode: 0o644
 
@@ -169,11 +182,16 @@ nfpms:
       - deb
       - rpm
     priority: optional
+    # Explicit rather than defaulted: the binary lands here at mode 0755.
+    bindir: /usr/bin
+    # There is deliberately NO contents entry for the binary. GoReleaser already
+    # installs every matched binary into `bindir` itself; listing it by hand is
+    # not merely redundant. `src` is a path/glob on the *build machine*, so
+    # `src: /usr/bin/loopworker` tells nfpm to glob for a file that exists on no
+    # build host, and nfpm fails - after the binaries and archives are already
+    # built, leaving 0-byte .deb/.rpm in dist/. That is what this comment exists
+    # to stop someone re-adding.
     contents:
-      - src: /usr/bin/loopworker
-        dst: /usr/bin/loopworker
-        file_info:
-          mode: 0755
       - src: config/config.example.yaml
         dst: /etc/loopworker/config.example.yaml
         file_info:
@@ -182,6 +200,39 @@ nfpms:
         type: dir
         file_info:
           mode: 0750
+      # A package that ships a binary and no licence text is a redistribution
+      # problem, not a packaging style question. Inspected rather than assumed:
+      # the deb and the rpm contained exactly three entries between them — the
+      # binary, the example config and the data directory — so a customer who
+      # installed by package manager received no licence, no attribution and no
+      # documentation, while the tarball carried all of it. Debian Policy 12.5
+      # expects the copyright text under /usr/share/doc/<pkg>/copyright, and
+      # rpm distributions expect the same directory; the NOTICE goes beside it
+      # because it is the attribution the Apache-2.0 dependencies require.
+      - src: LICENSE
+        dst: /usr/share/doc/loopworker/copyright
+        file_info:
+          mode: 0644
+      - src: NOTICE
+        dst: /usr/share/doc/loopworker/NOTICE
+        file_info:
+          mode: 0644
+      - src: README.md
+        dst: /usr/share/doc/loopworker/README.md
+        file_info:
+          mode: 0644
+      - src: CHANGELOG.md
+        dst: /usr/share/doc/loopworker/CHANGELOG.md
+        file_info:
+          mode: 0644
+      - src: docs/QUICKSTART.md
+        dst: /usr/share/doc/loopworker/QUICKSTART.md
+        file_info:
+          mode: 0644
+      - src: docs/USAGE.md
+        dst: /usr/share/doc/loopworker/USAGE.md
+        file_info:
+          mode: 0644
 
 checksum:
   name_template: "checksums.txt"
@@ -201,8 +252,36 @@ sboms:
       - "$artifact"
       - "--output"
       - "spdx-json=$document"
+    # Record every file in the shipped archive, not just the ones syft can
+    # attribute to a Go package. Measured on the linux-amd64 archive with
+    # syft v1.9.0: `all` yields 19 file entries, the default
+    # `owned-by-package` yields 1 (the binary alone) — LICENSE, README,
+    # CHANGELOG, SECURITY, SUPPORT, NOTICE, config.example.yaml, docs/** and
+    # examples/hello-plugin/** are not Go packages, so the default makes every
+    # non-binary file in the release invisible to anyone auditing it. Package
+    # count is 28 either way; this only widens the file inventory.
+    #
+    # The legal set is exactly: all | owned-by-package | none | "".
+    # `inputs` — which was here before — is rejected by
+    # cmd/syft/internal/options/file.go:59-63 (PostLoad). Because that is a
+    # PostLoad check the failure lands at "cataloging artifacts", i.e. *after*
+    # all 5 binaries, 5 archives, 2 debs and 2 rpms are already built, so a
+    # real release would die ~35s in with a full dist/ and nothing published.
+    # Nothing static catches this: `goreleaser check` only validates the config
+    # schema (it never invokes syft), release.yml's dry run passes
+    # `--skip=...sbom...`, and the publish path has never run (0 git tags).
+    # The ci.yml "release-sbom" job now runs this step for real on every push
+    # and PR, and also fails if any file digest comes back all-zero.
+    #
+    # Two syft behaviours to know when reading a generated SBOM, neither of
+    # them a defect here: the root entry is syft's own extraction path
+    # (/tmp/syft-archive-contents-<random>) and is a directory, so it carries
+    # no content hash; and running a *local* snapshot on Windows yields all-zero
+    # SHA1 for every file (reproduced on syft v1.9.0/amd64), because syft cannot
+    # read file contents there. Releases are built on ubuntu-latest, where the
+    # digests were verified correct.
     env:
-      - SYFT_FILE_METADATA_SELECTION=inputs
+      - SYFT_FILE_METADATA_SELECTION=all
 
 signs:
   # Keyless cosign signing via GitHub Actions OIDC (no long-lived secrets to

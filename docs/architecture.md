@@ -4,8 +4,10 @@
 > 已在文中就地标注的偏差：
 > - **§11.1 / §11.2 的审计日志、密码登录、账户锁定未接线**（`SecurityManager` 无生产调用方）。
 > - **持久化不是 GORM**，是 `database/sql` + `modernc.org/sqlite`（gorm 已移除）。
-> - **前端**：`web/canvas` 的 React 源码不在本仓库，仓库内只有构建产物 `pkg/api/dist/`
->   （`staticHandler` 提供）。`Liquid Glass` 主题相关章节描述的是那份产物，不是可二次开发的源码。
+> - **前端**：`web/canvas/` **有** React 源码（`src/App.jsx`、`SkillNode.jsx`、
+>   `WasmNode.jsx`、`AgentNode.jsx`…），但服务端 embed 的是**构建产物**
+>   `pkg/api/dist/`（`staticHandler` 提供）。改前端要在 `web/canvas/` 里
+>   `npm run build` 之后重新产出 `pkg/api/dist/`，否则改了也不生效。
 > - 指标与日志端点在 **loopback admin 监听器**（`server.admin_port`），不在 `/api/v1/*` 上；
 >   `pkg/api/openapi.json` 是路由的权威来源，`TestOpenAPISpecMatchesRegisteredRoutes` 会让文档漂移变红。
 >
@@ -44,73 +46,70 @@
 
 | 指标 | 数值 |
 |------|------|
-| 语言 | Go 1.26.1 |
-| 总代码量 | ~15,736 行 |
-| 源文件数 | 54 个 `.go` 文件 |
-| 测试文件数 | 25 个 `*_test.go` |
-| 核心模块代码量 | ~4,011 行（9 个核心文件） |
-| 默认端口 | 19527 |
+| 语言 | Go 1.26.6（`go.mod` 的 `go` 指令） |
+| 总代码量 | 22,144 行（非测试 `.go`，`git ls-files '*.go' \| grep -v _test \| xargs wc -l`，2026-10-06） |
+| 源文件数 | 91 个非测试 `.go` 文件 |
+| 测试文件数 | 63 个 `*_test.go` |
+| 默认端口 | 19527（API）/ 19528（admin，固定绑 127.0.0.1） |
 | WASM 运行时 | wazero (纯 Go 实现，无需 CGO) |
 | 持久化 | SQLite（`database/sql` + `modernc.org/sqlite`，纯 Go 驱动） |
-| 前端 | React + ReactFlow (Liquid Glass 主题) |
+| 前端 | React + ReactFlow（源码在 `web/canvas/src/`，服务端 embed 的是 `pkg/api/dist/`） |
 
 ### 1.2 目录结构
 
 ```
 loopWorker-for-go/
-├── cmd/loopworker/              # CLI 入口 (cobra)
-│   ├── main.go                  # 主入口，配置初始化
-│   └── main_test.go
-├── pkg/                         # 公共包（可独立使用）
-│   ├── event/                   # 事件系统 (EventBus + EventStore)
-│   ├── workflow/                # 工作流引擎 (732 LOC)
-│   ├── plugin/                  # 插件管理
+├── cmd/
+│   ├── loopworker/              # 产品二进制 (cobra)：doctor / storage / backup / version
+│   └── loopctl/                 # 开发者 CLI：task / workflow / status
+├── pkg/                         # 模块外可导入
+│   ├── api/                     # REST API (chi router)，admin 监听器也在此
+│   ├── client/                  # loopctl 用的 HTTP 客户端
+│   ├── errors/                  # sentinel 错误
+│   ├── event/                   # 事件系统 (EventBus + EventStore)，20 种事件
+│   ├── logger/                  # zap 封装
+│   ├── plugin/                  # 插件清单/管理器
+│   ├── security/                # 认证 + RBAC
+│   ├── server/                  # Server 组装 + doctor
 │   ├── skill/                   # 技能注册与上下文
-│   ├── security/                # 安全 (RBAC + 限流)
-│   ├── api/                     # REST API (chi router)
-│   ├── config/                  # 配置管理 (JSON + Env)
-│   ├── dashboard/               # Web 仪表板 (SSE 推送)
-│   ├── debugger/                # 调试工具
-│   ├── research/                # 异常检测
-│   ├── server/                  # Server 组装（上帝对象）
-│   ├── service/                 # 外部进程管理
-│   └── ui/                      # 主题系统
-├── internal/                    # 内部核心包
-│   ├── core/
-│   │   ├── scheduler/           # 调度器 (641 LOC，最重模块)
-│   │   ├── dispatcher/          # 分发器 (180 LOC)
-│   │   ├── executor/            # 执行器 (495 LOC)
-│   │   ├── sandbox/             # 沙箱 (479 LOC)
-│   │   ├── observer/            # 可观测性 (563 LOC)
-│   │   ├── selfheal/            # 自愈 (410 LOC)
-│   │   └── config/              # 内部配置
-├── web/canvas/                  # React 前端
-│   └── src/
-│       ├── App.jsx              # 主应用
-│       ├── SkillNode.jsx        # 技能节点可视化
-│       └── ...
-├── examples/                    # 示例
-│   ├── workflow/main.go         # 工作流使用示例
-│   └── wasm/                    # Rust WASM 代理示例
+│   ├── utils/
+│   └── workflow/                # 工作流引擎
+├── internal/                    # 内部核心包（模块外不可导入）
+│   ├── config/                  # 配置解析（唯一权威：internal/config/spec.go）
+│   └── core/
+│       ├── scheduler/           # 调度器 (883 LOC，最重模块)
+│       ├── selfheal/            # 自愈 (665 LOC)
+│       ├── executor/            # 执行器 (630 LOC)
+│       ├── observer/            # 可观测性 (634 LOC)
+│       ├── sandbox/             # 沙箱 (519 LOC)
+│       └── dispatcher/          # 分发器 (180 LOC)
+├── web/canvas/                  # React 前端源码（需 build 出 pkg/api/dist/）
+│   └── src/{App,SkillNode,WasmNode,AgentNode}.jsx
+├── plugins/                     # 插件目录
+├── examples/                    # hello-plugin / workflow / wasm/rust_agent
 ├── integration/                 # 集成测试
-└── docs/                        # 文档
-    └── architecture.md          # 架构设计文档（已有）
+├── test/                        # e2e
+└── docs/
 ```
+
+**不存在的目录**（本文早期版本列出过，现已删除，不要照着找）：
+`pkg/dashboard`、`pkg/config`、`pkg/debugger`、`pkg/research`、`pkg/service`、
+`pkg/ui`。配置在 `internal/config`，不是 `pkg/config`。
 
 ### 1.3 核心数据概览
 
-代码行数分布（核心文件）：
+代码行数分布（核心文件，`wc -l` 于 2026-10-06；这是快照不是承诺）：
 
 | 模块 | 文件 | 行数 | 职责权重 |
 |------|------|------|----------|
-| `workflow` | `workflow.go` | 732 | 最复杂，多范式编排 |
-| `scheduler` | `scheduler.go` | 641 | 状态机 + 持久化 |
-| `observer` | `observer.go` | 563 | 指标 + 追踪 + 日志 |
-| `sandbox` | `sandbox.go` | 479 | WASM 隔离 |
-| `executor` | `executor.go` | 495 | Worker 池 |
-| `selfheal` | `selfheal.go` | 410 | 熔断 + 恢复 |
-| `event` | `bus.go` | 293 | 事件总线 |
-| `security` | `security.go` | 218 | RBAC + 认证 |
+| `scheduler` | `internal/core/scheduler/scheduler.go` | 883 | 状态机 + 持久化 |
+| `workflow` | `pkg/workflow/workflow.go` | 819 | 多范式编排 |
+| `selfheal` | `internal/core/selfheal/selfheal.go` | 665 | 熔断 + 恢复 |
+| `observer` | `internal/core/observer/observer.go` | 634 | 指标 + 日志（无生产追踪，见 §12.1） |
+| `executor` | `internal/core/executor/executor.go` | 630 | Worker 池 |
+| `sandbox` | `internal/core/sandbox/sandbox.go` | 519 | WASM 隔离 |
+| `event` | `pkg/event/bus.go` | 283 | 事件总线 |
+| `security` | `pkg/security/security.go` | 252 | RBAC + 认证 |
 | `dispatcher` | `dispatcher.go` | 180 | 分发逻辑 |
 
 ---
@@ -130,7 +129,7 @@ loopWorker-for-go/
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                     Interface Layer                              │
-│   TUI (bubbletea) │ Web Dashboard │ REST API │ CLI (cobra)       │
+│   REST API (chi) │ admin listener │ Web canvas │ CLI (cobra)    │
 ├──────────────────────────────────────────────────────────────────┤
 │                     Core Engine                                  │
 │   Scheduler → Dispatcher → Executor → Sandbox                   │
@@ -138,12 +137,15 @@ loopWorker-for-go/
 │   WorkflowEngine ──→ SchedulerBridge                            │
 ├──────────────────────────────────────────────────────────────────┤
 │                     Infrastructure Layer                         │
-│   SelfHeal │ Observer │ Security │ Service │ Debugger │ Skill   │
+│   SelfHeal │ Observer │ Security │ Plugin │ Skill                │
 ├──────────────────────────────────────────────────────────────────┤
 │                     Storage Layer                                │
-│   EventStore (SQLite) │ Config (JSON) │ State (In-Memory)       │
+│   SQLite (tasks) │ Config (internal/config) │ State (In-Memory)│
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+（没有 TUI/bubbletea，没有独立的 Dashboard / Service / Debugger 进程 ——
+`go.mod` 里没有这些依赖，`pkg/dashboard` 等目录也不存在。）
 
 ### 2.3 组合优于继承
 
@@ -161,7 +163,7 @@ loopWorker-for-go/
 | `sync.RWMutex` | Scheduler, Executor, Observer, PluginManager | 读写分离锁 |
 | `atomic` 操作 | ExecutorStats, Worker state/counters | 无锁原子操作 |
 | Channel | Worker.taskCh, EventBus subscriber channels | 消息传递 |
-| `sync.Mutex` | Dashboard throttle, Observer logs | 互斥锁 |
+| `sync.Mutex` | Workflow（`pkg/workflow` 的运行状态）, Observer logs | 互斥锁 |
 
 ---
 
@@ -175,7 +177,7 @@ loopWorker-for-go/
                     ┌─────────────────────────────────────────────────────────┐
                     │                    Event Bus                            │
                     │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐ │
-                    │  │Observer  │  │Dashboard │  │SelfHeal  │  │ ...    │ │
+                    │  │Observer  │  │SelfHeal  │  │ Workflow │  │ ...    │ │
                     │  └──────────┘  └──────────┘  └──────────┘  └────────┘ │
                     └────────────────────────┬────────────────────────────────┘
                                              │ Publish/Subscribe
@@ -798,27 +800,29 @@ func (sm *SecurityManager) Authenticate(username, password) (*Token, error)
 
 ## 12. Observer — 可观测性体系
 
-### 12.1 三重可观测性
+### 12.1 两重可观测性（不是三重）
 
 **Metrics（指标）**：
 - 自定义指标系统（Counter/Gauge/Histogram）
-- Prometheus 指标导出（tasks_created_total, task_duration_seconds 等）
+- Prometheus 指标导出（`loopworker_tasks_created_total`、
+  `loopworker_tasks_started_total`、`loopworker_tasks_completed_total`、
+  `loopworker_tasks_failed_total`、`loopworker_task_duration_seconds`）
 - 自动从 EventBus 事件中采集
-
-**Traces（追踪）**：
-```go
-func (o *Observer) StartTrace(operation) *TraceSpan
-func (o *Observer) EndTrace(span, status)
-```
 
 **Logs（日志）**：
 - 结构化日志（zap 集成）
 - 按级别过滤（Debug/Info/Warn/Error）
 - 按组件查询
 
+> ⚠️ **`Observer` 上没有生产可用的追踪。** `StartTrace` / `EndTrace` /
+> `GetTraces`（`observer.go:494/515/534`）确实存在，但**唯一的调用方是
+> `observer_test.go` 与 `liveness_test.go`**；仓库里没有 OTel 依赖、没有
+> exporter、没有上下文传播。判据是「非测试调用方数量」，不是「有没有那个函数」。
+> 客户端要分布式追踪请自己在 `pkg/api` 层接。
+
 ### 12.2 事件驱动的指标采集
 
-Observer 通过订阅 EventBus 的 20 种事件类型，自动将事件转换为指标：
+Observer 的 `Start` 订阅 EventBus 的**全部 20 种**事件类型，把事件转换为指标：
 
 ```
 EventTaskCompleted → tasks_completed counter + task_duration histogram
@@ -829,6 +833,10 @@ EventSkillInvoked  → skills_invoked counter
 ```
 
 这意味着**任何模块只要发布事件，就会自动获得指标**，无需修改 Observer 代码。
+
+注意两套指标的区别：上面这些点分名字（`tasks.created`、`workers.spawned`…）
+是 `IncrementCounter` 的**进程内**累加器，不导出 Prometheus；只有 §12.1 列出的
+5 个 `loopworker_*` 向量出现在 admin 监听器的 `/metrics` 上。
 
 ---
 
@@ -931,10 +939,17 @@ if pm.skillRegistry != nil && len(info.Skills) > 0 {
 
 ## 15. AI & Research — 智能分析层
 
+> ⚠️ **`pkg/ai` 与 `pkg/research` 都不存在。** LLM 部分搬到了
+> `internal/core/executor/llm.go`；**异常检测器（`AnomalyDetector` /
+> `TrendDetector` / `CorrelationDetector`）没有任何实现** ——
+> `grep -rn 'AnomalyDetector' --include=*.go` 零命中，
+> `event.EventResearchFinding` 这个事件类型被定义、被 observer 订阅计数，
+> 但**没有任何代码发布它**。§15.3 的检测器表是设计意图，不是现状。
+
 ### 15.1 LLM Client
 
 ```go
-// pkg/ai/llm.go:46
+// internal/core/executor/llm.go:46
 type LLMClient struct {
     BaseURL string                        // 默认 "https://api.openai.com/v1"
     APIKey  string
@@ -951,7 +966,7 @@ type LLMClient struct {
 ### 15.2 Context Builder
 
 ```go
-// pkg/ai/llm.go:142
+// internal/core/executor/llm.go:142
 type ContextBuilder struct {
     MaxChars int    // 默认 16000
 }
@@ -962,26 +977,12 @@ type ContextBuilder struct {
 - 总长度超过限制时采用首尾截断
 - 最终输出附带 "Main Instructions" 主提示
 
-### 15.3 Research Engine
+### 15.3 Research Engine — **不存在**
 
-```go
-// pkg/research/research.go:140
-type ResearchEngine struct {
-    detectors []Detector
-    results   map[string][]Finding
-    eventBus  *event.EventBus
-}
-```
-
-内置三种模式检测器：
-
-| 检测器 | 算法 | 输出 |
-|--------|------|------|
-| `AnomalyDetector` | Z-Score（均值 + 标准差） | 异常值 Finding |
-| `TrendDetector` | 线性回归斜率 | 上升/下降趋势 Finding |
-| `CorrelationDetector` | 相关系数 | 相关性 Finding |
-
-每个 Finding 包含：ID、类型、置信度、描述、证据列表、建议。检测结果通过 EventBus 发布 `EventResearchFinding` 事件。
+设计里描述的检测器（Z-Score 异常 / 线性回归趋势 / 相关系数）**没有实现**。
+本仓库里能查到的只有 `event.ResearchFindingPayload` 这个事件负载类型。
+如果你要用异常检测，用内置工作流 `builtin.anomaly-review`（它自带合成数据
+与判定逻辑，需要零插件、零 API key），不要指望 §15.3 描述的引擎。
 
 ### 15.4 与 Executor 的集成
 
@@ -998,15 +999,20 @@ llmCancel()
 
 ## 16. Code Generator — 脚手架生成
 
-### 16.1 模板系统
+> ⚠️ **本节整体不存在。** `pkg/generator` 目录不存在，`Template` /
+> `TemplateType` / `TemplateWorkflow` 等类型在仓库里没有任何定义，
+> 也没有任何生产调用方。要生成骨架，用 `examples/hello-plugin`（WASM 插件）
+> 和 `examples/workflow/main.go`（工作流）当模板改。
+
+### 16.1-16.3（原设计意图，无实现）
 
 ```go
-// pkg/generator/generator.go:19
+// pkg/generator/generator.go:19 —— 这个文件不存在
 type Template struct {
     Name        string
-    Type        TemplateType    // Workflow / Plugin / API / Scheduler / Security
+    Type        TemplateType
     Description string
-    Content     string          // Go 源码模板
+    Content     string
     Variables   map[string]string
 }
 ```
@@ -1035,24 +1041,16 @@ type Template struct {
 
 ## 17. UI & Theme — 多主题系统
 
-### 17.1 主题接口
+> ⚠️ **`pkg/ui` 与 `pkg/config` 都不存在**，服务端没有主题系统：
+> `Theme` / `LightTheme` / `DarkTheme` / `GlassTheme` / `ThemeColors` /
+> `SettingsManager` 全部没有定义。主题是**前端 CSS** 的事 ——
+> `web/canvas/src/index.css` 里确实有 `.glass-card`、`.node-glow-running`
+> 这类类名，但改它要改 `web/canvas/` 并重新 build `pkg/api/dist/`。
+> 配置里也没有 `appearance` 段（写进配置文件会导致启动失败）。
 
-```go
-// pkg/ui/theme.go:7
-type Theme interface {
-    Name() string
-    Colors() ThemeColors
-    IsDark() bool
-}
-```
+### 17.1-17.3（原设计意图，无服务端实现）
 
-### 17.2 三种主题
-
-| 主题 | 说明 | 背景风格 |
-|------|------|----------|
-| `LightTheme` | 经典浅色 | 纯白背景 |
-| `DarkTheme` | 经典深色 | 深灰背景 |
-| `GlassTheme` | **毛玻璃（默认）** | 半透明 + 模糊阴影 |
+毛玻璃样式是前端 CSS 的实现，不是 Go 侧的主题对象。
 
 ### 17.3 配色系统
 
@@ -1100,7 +1098,15 @@ func GoSafe(ctx context.Context, fn func(context.Context))
 - 打印堆栈信息
 - 防止单个 goroutine 的 panic 导致整个进程崩溃
 
-被 `GoSafe` 保护的 goroutine 包括：Worker 循环、Watchdog、Dashboard SSE 监听、EventBus 处理、Service 管理等。
+被 `GoSafe` 保护的生产 goroutine（`grep -rn GoSafe --include=*.go`，非测试共 8 处）：
+Executor 的 worker 循环与 watchdog（`executor.go:200,570`）、Sandbox 的执行
+（`sandbox.go:377`，用的是会把 panic 作为错误投递的 `GoSafeE`）、
+`pkg/api` 的工作流执行（`handlers_system.go:245`）、
+`pkg/server` 的两处（`server.go:434,846`）、`pkg/workflow` 的并行执行
+（`workflow.go:744`）。
+
+（EventBus 的订阅处理循环不走 `GoSafe`，它用 context 取消；没有 Dashboard 或
+Service 模块 —— 那两个目录不存在。）
 
 ---
 
@@ -1108,40 +1114,67 @@ func GoSafe(ctx context.Context, fn func(context.Context))
 
 ### 18.1 API 路由
 
+权威列表是 `pkg/api/openapi.json`（由 `TestOpenAPISpecMatchesRegisteredRoutes`
+锁定）。API 端口（默认 19527）：
+
 ```
+/healthz                           # 匿名存活探针
 /api/v1
-├── GET  /health                    # 健康检查
+├── GET  /health                    # 匿名（auth 恒为 "required"）
+├── GET  /openapi.json              # 匿名
 ├── GET  /workflow/graph            # 工作流依赖图
 ├── GET  /workflow/list             # 工作流列表
-├── POST /workflow/execute          # 执行工作流
-├── GET  /events/live               # 实时事件流
+├── GET  /workflow/{workflowID}     # 单个工作流
+├── POST /workflow/execute          # 执行工作流（202）
+├── GET  /events/live               # SSE 实时事件流
+├── GET  /auth/whoami               # 当前身份
+├── POST /auth/token                # 换 bearer token
+├── GET/POST/DELETE /auth/keys[/{keyID}]  # 密钥管理
 ├── /tasks
 │   ├── GET  /                      # 任务列表
-│   ├── POST /                      # 创建任务
+│   ├── POST /                      # 创建任务（201）
 │   └── /{taskID}
 │       ├── GET  /                  # 任务详情
-│       ├── DELETE /                # 删除任务
+│       ├── DELETE /                # 与 cancel 同一个处理器
+│       ├── POST /cancel            # 取消
 │       └── POST /dependencies      # 添加依赖
 └── /workers
     └── GET  /                      # Worker 列表
 
-/metrics                            # Prometheus 指标
-/*                                  # 嵌入式前端静态文件
+/*                                  # 嵌入式前端（pkg/api/dist/）
 ```
+
+**`/metrics` 和 `/logs` 不在这个端口上。** 它们在 admin 监听器
+（默认 `127.0.0.1:19528`）：`/metrics`、`/runtime/stats`、`/logs`、
+`/events/stats`、`/healthz`。API 端口上访问 `/metrics` 是 404。
+
+角色要求：读 = 任意角色；写（`POST /tasks`、`DELETE`、`/cancel`、
+`/dependencies`）需要 write；`/workflow/execute` 需要 execute；
+`/auth/*` 需要 admin。
 
 ### 18.2 中间件链
 
+实际顺序（`pkg/api/api.go:registerRoutes`）：
+
 ```go
-// api.go:49-61
-r.Use(corsMiddleware)           // CORS
-r.Use(rateLimitMiddleware)      // 100 req/min/IP
-r.Use(requestIDMiddleware)      // X-Request-ID
-r.Use(middleware.RealIP)        // 真实 IP
-r.Use(middleware.Logger)        // 请求日志
-r.Use(middleware.Recoverer)     // panic 恢复
-r.Use(middleware.Timeout(60s))  // 全局超时
-r.Use(requestLoggingMiddleware) // 自定义日志
+s.Router.Use(securityHeaders)
+s.Router.Use(bundle.cors)
+s.Router.Use(bundle.requestID)
+s.Router.Use(bundle.accessLog)
+s.Router.Use(s.blockConfigError())
+s.Router.Use(middleware_Recoverer())
+s.Router.Use(bundle.bodyLimit)     // api.max_body_bytes，默认 10 MB
+s.Router.Use(bundle.timeout)       // 默认 30s
+
+public := s.Router.With(bundle.rateLimitIP)          // 匿名按 IP 限流
+public.Get("/healthz", s.livenessProbe)
+
+r.With(bundle.authMiddleware, bundle.principalLimit).Group(func(authed chi.Router) {
+    // 认证按凭据限流；角色检查逐路由（require(PermWrite/Execute/Admin)）
+})
 ```
+
+限流是**加权**的：SSE 计 5 点，`POST`/`DELETE`/`PUT` 计 2 点，其余读计 1 点。
 
 ### 18.3 前端架构
 
@@ -1184,14 +1217,23 @@ r.Use(requestLoggingMiddleware) // 自定义日志
 
 ## 20. 关键设计决策评析
 
-### 20.1 优点
+### 20.1 已知问题（编号与原文档不一致，这里按现状重列）
 
-1. **Server 对象过大**：`Server` 结构体持有 16 个组件，是典型的 God Object。可考虑拆分为独立的服务层。
-2. **内存中状态**：User、Token 等安全相关数据存储于内存，进程重启后丢失。
-3. **Dashboard 使用全局 mux**：`http.HandleFunc` 注册到 `DefaultServeMux`，在测试中容易产生冲突。
-4. **Error 处理不一致**：部分错误被忽略（`_ = eventBus.Publish`），部分被包装返回。
-5. **缺少超时配置**：API 中间件设置了 60 秒超时，但 Worker 执行超时仅在 Agent 模式中设置。
-6. **SQLite 单节点**：当前持久化方案不支持多节点部署。
+1. **`Server` 是 God Object**：持有全部组件，可考虑拆分。
+2. **内存中状态**：`pkg/security.SecurityManager` 的 User/Token 存内存，重启丢失
+   —— 而且它**根本没有生产调用方**（见 §11.1 的偏差说明）；生产走
+   `pkg/security.Authenticator` 的 API key / bearer token 链路。
+3. **Error 处理不一致**：部分错误被忽略（`_ = eventBus.Publish`），部分被包装返回。
+4. **超时**：`api.request_timeout` 默认 30s（不是 60s），且**写超时被关掉**
+   （`WriteTimeout = 0`）以让 SSE 能长连。worker 侧超时是
+   `workers.task_timeout`（默认 30m），不是只在 Agent 模式里设置。
+5. **SQLite 单节点**：当前持久化方案不支持多节点部署。
+6. **两个配置键被接受但不生效**：`workflow.max_concurrent` 与
+   `workflow.timeout`。启动自检把它们列进 `unapplied_keys` 并打印修复建议 ——
+   这是**刻意**的（不静默忽略），不要当成 bug 去"修"文档。
+7. **`security.enabled` 无消费者**：见 §11.1 与 API 参考「认证」。
+8. **没有 Dashboard 全局 mux 问题**：`pkg/dashboard` 目录不存在，该顾虑已随
+   模块删除而消失。
 
 ### 19.3 架构演进建议
 
@@ -1220,15 +1262,19 @@ r.Use(requestLoggingMiddleware) // 自定义日志
 
 LoopWorker 是一个架构设计优秀的工业级工作流引擎。其核心优势在于：
 
-- **事件驱动架构**提供了卓越的松耦合性和可扩展性
-- **完整的生命周期管理**（创建→调度→执行→完成/失败→重试→死信）
-- **多层防护体系**（限流→认证→授权→审计）
+- **事件驱动架构**提供了松耦合性和可扩展性（20 种事件，13 种上 SSE）
+- **完整的生命周期管理**（pending→queued→running→completed/failed，
+  重试耗尽进 dead_letter）
+- **多层防护体系**（限流→认证→授权→输入校验→请求体上限→任务归属隔离）
+  —— **审计日志不在其中**：`pkg/security.SecurityManager` 没有生产调用方（§11.1）
 - **自愈能力**（熔断器→重试→僵尸检测→自动重生）
 - **多范式工作流**（顺序/DAG/并行）
 
-代码量适中（~15K LOC），核心模块清晰，测试覆盖率高（25 个测试文件）。适合作为学习 Go 后端架构设计的参考项目。
+代码量 22,144 行非测试 Go（91 个源文件、63 个测试文件，2026-10-06 实测）。
+**不要**把它当参考项目抄：本文开头列的偏差（GORM、审计日志、前端源码、
+三层防护的第 3 层）都是它现在不做的事。
 
 ---
 
-*分析基于 commit `loopWorker-for-go` 的完整源代码*
-*日期：2026-07-02*
+*本文写于 2026-08 之前，是设计意图分析；文中标注的偏差以代码为准。
+逐条实测状态见 [AGENT-COLLABORATION-SPEC.md](../AGENT-COLLABORATION-SPEC.md) §8/§10。*

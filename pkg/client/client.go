@@ -1,5 +1,5 @@
-// Package client is the HTTP client the loopctl, loopdebug and loopwatch CLIs
-// use to reach a LoopWorker server.
+// Package client is the HTTP client the loopctl CLI uses to reach a LoopWorker
+// server, and the one an SDK user embeds to do the same from their own program.
 //
 // # Credentials
 //
@@ -14,7 +14,9 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -104,7 +106,7 @@ func (c *APIClient) do(req *http.Request) ([]byte, error) {
 
 // Get performs a GET request.
 func (c *APIClient) Get(path string) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodGet, c.BaseURL+path, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, c.BaseURL+path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -117,7 +119,7 @@ func (c *APIClient) Post(path string, data interface{}) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
-	req, err := http.NewRequest(http.MethodPost, c.BaseURL+path, bytes.NewReader(jsonData))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.BaseURL+path, bytes.NewReader(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -127,7 +129,7 @@ func (c *APIClient) Post(path string, data interface{}) ([]byte, error) {
 
 // Delete performs a DELETE request.
 func (c *APIClient) Delete(path string) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodDelete, c.BaseURL+path, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, c.BaseURL+path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -300,44 +302,60 @@ func (c *APIClient) ExecuteWorkflow(workflowID string, input interface{}) (map[s
 	return result, nil
 }
 
-// GetMetrics gets server metrics.
+// GetWorkflow returns one registered workflow by id.
 //
-// Deprecated: this cannot succeed against a LoopWorker server. There is no
-// /api/v1/metrics route. Metrics live on the loopback admin listener
-// (server.admin_port, 19528 by default), behind admin permission, and are
-// served as Prometheus text - so the JSON decode below would fail even if the
-// path were right. Kept only so existing callers keep compiling; deletion is a
-// product decision, not this package's to make. Use a Prometheus client
-// against the admin listener instead.
-func (c *APIClient) GetMetrics() (map[string]interface{}, error) {
-	body, err := c.Get("/api/v1/metrics")
+// This wraps GET /api/v1/workflow/{workflowID}, which has been registered since
+// the route table was split out of pkg/api. It was simply never wired into this
+// client, so a documented route was reachable with curl and with nothing else.
+func (c *APIClient) GetWorkflow(workflowID string) (map[string]interface{}, error) {
+	body, err := c.Get("/api/v1/workflow/" + workflowID)
 	if err != nil {
 		return nil, err
 	}
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
+	var wf map[string]interface{}
+	if err := decode(body, &wf); err != nil {
+		return nil, err
 	}
 
-	return result, nil
+	return wf, nil
+}
+
+// GetMetrics gets server metrics.
+//
+// Deprecated: this cannot succeed against a LoopWorker server. There is no
+// metrics route on the public API. Metrics live on the loopback admin listener
+// (server.admin_port, 19528 by default), behind admin permission, and are
+// served as Prometheus text rather than JSON — so this decodes nothing even if
+// the path were right. Kept only so existing callers keep compiling; deletion is
+// a product decision, not this package's to make. Use a Prometheus client
+// against the admin listener instead.
+//
+// It now fails immediately and says why, instead of spending a request to be
+// told "404" or handing back a JSON decode error that looks like a server bug.
+func (c *APIClient) GetMetrics() (map[string]interface{}, error) {
+	return nil, errNoPublicMetricsRoute
 }
 
 // GetLogs gets server logs.
 //
-// Deprecated: same problem as GetMetrics. There is no /api/v1/logs route; logs
+// Deprecated: same problem as GetMetrics, and the same immediate error. Logs
 // live on the admin listener (server.admin_port) and arrive inside a
 // {"data":{"logs":[...]}} envelope, not as the bare array this decodes.
 func (c *APIClient) GetLogs() ([]map[string]interface{}, error) {
-	body, err := c.Get("/api/v1/logs")
-	if err != nil {
-		return nil, err
-	}
-
-	var result []map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	return result, nil
+	return nil, errNoPublicLogsRoute
 }
+
+// These two used to issue a request to a path the router never registered. The
+// caller paid a round trip to be told "404", or — worse, when something did
+// answer — got a JSON decode failure that reads like a server defect. Saying it
+// cannot work is the honest answer, and it is checkable: relcheck reads the
+// routes this package quotes and fails when one is not in the spec.
+var (
+	errNoPublicMetricsRoute = errors.New("pkg/client: there is no metrics route on the public API. " +
+		"Metrics are Prometheus text on the loopback admin listener (server.admin_port, 19528 by default) " +
+		"behind an admin credential. See GET /metrics in the API reference.")
+	errNoPublicLogsRoute = errors.New("pkg/client: there is no logs route on the public API. " +
+		"Logs are served on the loopback admin listener (server.admin_port, 19528 by default) behind an " +
+		"admin credential, inside a {\"data\":{\"logs\":[...]}} envelope. See GET /logs in the API reference.")
+)

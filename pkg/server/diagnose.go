@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 
 	"loopworker/internal/config"
 	"loopworker/pkg/api"
+	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/logger"
 	"loopworker/pkg/security"
 	"loopworker/version"
@@ -50,11 +52,26 @@ type Diagnostics struct {
 	Checks       []Check        `json:"checks"`
 	Runtime      map[string]any `json:"runtime,omitempty"`
 	Unapplied    []string       `json:"unapplied_keys,omitempty"`
+
+	// causes holds the underlying errors behind the failed checks. They are not
+	// printed separately - each check's Detail already names its cause in prose -
+	// but they are carried so errors.Is can reach them. A host embedding this
+	// package needs to tell "the port is taken" (retry elsewhere) from "the
+	// configuration is wrong" (stop and ask the operator), and matching the
+	// rendered message is the only way to do that without this.
+	causes []error
 }
 
 // Diagnose validates the environment a server would start in. It performs no
 // mutation other than a port probe, so a doctor command can call it freely.
 func Diagnose(cfg *config.Config) *Diagnostics {
+	return diagnose(context.Background(), cfg)
+}
+
+// diagnose is Diagnose with a caller-supplied context. The port probe binds a
+// socket, so a caller that already has a lifecycle context - boot, in practice -
+// passes it rather than starting an unbounded probe it cannot cancel.
+func diagnose(ctx context.Context, cfg *config.Config) *Diagnostics {
 	d := &Diagnostics{
 		Timestamp:    time.Now(),
 		Version:      version.Get(),
@@ -66,7 +83,7 @@ func Diagnose(cfg *config.Config) *Diagnostics {
 	d.add(d.checkDirectories(cfg))
 	d.add(d.checkDatabase(cfg))
 	d.add(d.checkPlugins(cfg))
-	d.add(d.checkPort(cfg))
+	d.add(d.checkPort(ctx, cfg))
 	d.add(d.checkSandbox(cfg))
 	d.add(d.checkSecurity(cfg))
 	d.add(d.checkWorkers(cfg))
@@ -88,7 +105,14 @@ func Diagnose(cfg *config.Config) *Diagnostics {
 func describeConfigSource(cfg *config.Config) string {
 	file := cfg.ConfigFile()
 	if file == "" {
-		return "defaults + environment" + flagSuffix(cfg)
+		desc := "defaults + environment" + flagSuffix(cfg)
+		// A config file in the wrong directory produces no other symptom: the
+		// server starts normally on defaults. Naming the directories is what
+		// turns "my setting did nothing" into an answerable question.
+		if dirs := cfg.SearchedPaths(); len(dirs) > 0 {
+			desc += fmt.Sprintf(" (no config file found; looked in %s)", strings.Join(dirs, ", "))
+		}
+		return desc
 	}
 	ext := strings.ToLower(filepath.Ext(file))
 	format := "YAML"
@@ -204,9 +228,13 @@ func (d *Diagnostics) checkPlugins(cfg *config.Config) Check {
 		Detail: fmt.Sprintf("%d entr(ies) in %s, auto_load=%v", entries, cfg.Plugins.Dir, cfg.Plugins.AutoLoad)}
 }
 
-func (d *Diagnostics) checkPort(cfg *config.Config) Check {
-	ln, err := net.Listen("tcp", cfg.Addr())
+func (d *Diagnostics) checkPort(ctx context.Context, cfg *config.Config) Check {
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.Addr())
 	if err != nil {
+		// Kept, not just printed: boot turns this into a startup failure, and a
+		// host (or a test retrying on a taken port) has to be able to recognise
+		// the cause. See Diagnostics.causes.
+		d.causes = append(d.causes, fmt.Errorf("%w: %w", lwerrors.ErrPortUnavailable, err))
 		return Check{Name: "port", Status: StatusFail,
 			Detail: fmt.Sprintf("cannot bind %s: %v", cfg.Addr(), err),
 			Hint:   fmt.Sprintf("use --port %d or stop whatever holds %s", cfg.Server.Port+1, cfg.Addr())}
@@ -214,7 +242,7 @@ func (d *Diagnostics) checkPort(cfg *config.Config) Check {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 	detail := fmt.Sprintf("%s is free (resolved listen address %s)", cfg.Addr(), addr)
-	if adminErr := checkAdminPort(cfg.Server.AdminPort); adminErr != nil {
+	if adminErr := checkAdminPort(ctx, cfg.Server.AdminPort); adminErr != nil {
 		// The API port is the service; the admin port is observability. A
 		// collision there is a warning naming the key, because the server
 		// starts either way and simply loses /metrics.
@@ -225,8 +253,8 @@ func (d *Diagnostics) checkPort(cfg *config.Config) Check {
 	return Check{Name: "port", Status: StatusOK, Detail: detail}
 }
 
-func checkAdminPort(port int) error {
-	ln, err := net.Listen("tcp", net.JoinHostPort(api.DefaultAdminBind, strconv.Itoa(port)))
+func checkAdminPort(ctx context.Context, port int) error {
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort(api.DefaultAdminBind, strconv.Itoa(port)))
 	if err != nil {
 		return err
 	}
@@ -376,8 +404,23 @@ func (d *Diagnostics) FatalError() error {
 	if len(problems) == 0 {
 		return nil
 	}
-	return fmt.Errorf("startup self-check failed\n  - %s", strings.Join(problems, "\n  - "))
+	return &selfCheckError{
+		report: fmt.Sprintf("startup self-check failed\n  - %s", strings.Join(problems, "\n  - ")),
+		causes: d.causes,
+	}
 }
+
+// selfCheckError is the error FatalError returns. Its message is the same report
+// it always was; Unwrap additionally exposes the causes behind the failed
+// checks so errors.Is can reach them. See Diagnostics.causes.
+type selfCheckError struct {
+	report string
+	causes []error
+}
+
+func (e *selfCheckError) Error() string { return e.report }
+
+func (e *selfCheckError) Unwrap() []error { return e.causes }
 
 // Log prints the self-check so a first run explains itself before any request.
 func (d *Diagnostics) Log() {

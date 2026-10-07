@@ -1,10 +1,12 @@
 import React from 'react';
-import { Handle, Position } from 'reactflow';
+import { Handle, Position } from '@xyflow/react';
 import { Cpu, CheckCircle, Play, XCircle, AlertCircle } from 'lucide-react';
 
 export default function WasmNode({ data }) {
   const task = data.task || {};
-  const state = task.State || 'pending';
+  // The API serialises tasks with lower-case JSON keys (see the graph handler),
+  // so reading task.State here silently showed every task as PENDING.
+  const state = task.state || 'pending';
 
   const getStateStyles = () => {
     switch (state) {
@@ -60,7 +62,7 @@ export default function WasmNode({ data }) {
         <div style={{ flex: 1 }}>
           <h4 style={{ margin: 0, fontWeight: 600, fontSize: '14px', color: '#e2e8f0' }}>{data.label}</h4>
           <span style={{ fontSize: '10px', color: '#94a3b8', fontFamily: 'monospace', display: 'block', marginTop: '2px' }}>
-            {task.ID || 'ID: Pending'}
+            {task.id || 'ID: Pending'}
           </span>
         </div>
       </div>
@@ -81,9 +83,9 @@ export default function WasmNode({ data }) {
           {styles.icon}
           {state.toUpperCase()}
         </div>
-        {task.Retry > 0 && (
+        {task.retry > 0 && (
           <span style={{ fontSize: '10px', color: '#fbbf24', marginLeft: 'auto', fontFamily: 'monospace' }}>
-            Retry: {task.Retry}
+            Retry: {task.retry}
           </span>
         )}
       </div>

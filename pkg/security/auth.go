@@ -267,7 +267,7 @@ func (a *Authenticator) APIKeyHeader() string { return a.header }
 func (a *Authenticator) HasCredentials() bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return len(a.byHash) > 0 && !(len(a.byHash) == 1 && a.boot != nil)
+	return len(a.byHash) > 0 && (len(a.byHash) != 1 || a.boot == nil)
 }
 
 // BootstrapKey returns the ephemeral admin key (plaintext, id) minted when no
@@ -295,7 +295,11 @@ func (a *Authenticator) AddKey(name, role string, expiresAt time.Time) (plaintex
 	return plaintext, rec, nil
 }
 
-// RevokeKey removes a key by id and invalidates its bearer tokens.
+// RevokeKey removes a key by id. Its already-issued bearer tokens are withdrawn
+// with it, but not here: nothing records the tokens a key minted, so
+// AuthenticateBearer resolves the token's subject against the key table on every
+// request and rejects the token once the key is gone. Deleting from byID is
+// therefore the whole of the revocation.
 func (a *Authenticator) RevokeKey(keyID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -473,17 +477,32 @@ func (a *Authenticator) AuthenticateBearer(raw string) (*Principal, error) {
 
 	a.mu.RLock()
 	_, isRevoked := a.revoked[claims.ID]
-	sourceValid := true
+	// A token minted from an API key is only as good as that key. The check
+	// lives here rather than in RevokeKey because RevokeKey cannot enumerate
+	// what it withdrew: no issued-token registry exists, so the withdrawal has
+	// to be inferred at verification time from the key that is gone.
+	//
+	// The two failures are reported apart deliberately. A key that is simply
+	// absent was revoked or deleted, and TOKEN_EXPIRED's remedy — "request a
+	// fresh bearer token, or reload an unexpired API key" — walks the reader
+	// straight back to the key that no longer exists, mid-incident.
+	sourceGone := false
+	sourceExpired := false
 	if claims.Via == ViaAPIKey {
 		rec, known := a.byID[claims.Subject]
-		sourceValid = known && !rec.Expired(now)
+		switch {
+		case !known:
+			sourceGone = true
+		case rec.Expired(now):
+			sourceExpired = true
+		}
 	}
 	a.mu.RUnlock()
 
-	if isRevoked {
+	if isRevoked || sourceGone {
 		return nil, lwerrors.ErrTokenInvalid
 	}
-	if !sourceValid {
+	if sourceExpired {
 		return nil, lwerrors.ErrTokenExpired
 	}
 	return &Principal{

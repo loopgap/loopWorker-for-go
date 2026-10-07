@@ -380,10 +380,7 @@ func TestSpinningPluginIsTerminatedAndGoroutineGone(t *testing.T) {
 
 // Item 4 (continued): a hostile artifact from a real toolchain is killed too.
 func TestSpinningRealWasmPluginIsKilled(t *testing.T) {
-	artifact := realWasmArtifact(t, "go-wasi-spin.wasm")
-	if artifact == nil {
-		t.Skip("testdata/go-wasi-spin.wasm is missing; build it with GOOS=wasip1 GOARCH=wasm")
-	}
+	artifact := realSpinArtifact(t)
 
 	ctx := context.Background()
 	sb := mustSandbox(t, SandboxConfig{MaxCPUSeconds: 2, MaxMemoryMB: 512})

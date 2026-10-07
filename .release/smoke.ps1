@@ -87,15 +87,31 @@ if ($Port -eq '') {
     $listener.Stop()
 }
 
+# The admin listener has its own fixed default port, which the main port above
+# does not cover. boot-smoke.sh has always taken a free one here; this script did
+# not, so a Windows run bound 19528 whatever else was on the machine. The server
+# survives a collision — pkg/server/server.go degrades it to a warning rather
+# than refusing to start — so this was never a red build, just a run that quietly
+# lost /metrics and /runtime/stats, and a claim about parallel safety that was
+# only half true on one of the two platforms.
+$adminListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+$adminListener.Start()
+$AdminPort = $adminListener.LocalEndpoint.Port
+$adminListener.Stop()
+
 $dataDir    = Join-Path $env:TEMP ("lw-smoke-data-"   + [guid]::NewGuid().ToString('N'))
 $pluginsDir = Join-Path $env:TEMP ("lw-smoke-plugins-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $dataDir, $pluginsDir | Out-Null
 
-# Env overrides are read by internal/config.applyEnvironmentOverrides().
+# Env overrides are read by internal/config's key registry. relcheck asserts
+# every LOOPWORKER_* name set here exists in that registry, because a name that
+# drifts out of it does not fail loudly: the server silently keeps its default
+# and the health poll below times out against the wrong port.
 $env:LOOPWORKER_PORT       = "$Port"
 $env:LOOPWORKER_DATA_DIR   = $dataDir
 $env:LOOPWORKER_PLUGINS_DIR= $pluginsDir
 $env:LOOPWORKER_LOG_LEVEL  = 'debug'
+$env:LOOPWORKER_API_ADMIN_PORT = "$AdminPort"
 
 $si = New-Object LW.Smoke+STARTUPINFO
 $si.cb = [System.Runtime.InteropServices.Marshal]::SizeOf($si)
@@ -103,7 +119,16 @@ $pi = New-Object LW.Smoke+PROCESS_INFORMATION
 $cmdLine = "`"$BinPath`""
 
 Write-Host "==> booting $BinPath on 127.0.0.1:$Port" -ForegroundColor Cyan
-$ok = [LW.Smoke]::CreateProcessW($null, $cmdLine, [IntPtr]::Zero, [IntPtr]::Zero,
+# lpApplicationName carries the full path; lpCommandLine still names the program
+# so the child's argv[0] is right. Passing $null as the application name makes
+# Windows parse the first token of the command line and resolve it itself, and
+# on Windows that resolution fails outright here: 0/10 attempts returned
+# ERROR_PATH_NOT_FOUND (3), and the same call with the path passed explicitly
+# succeeded 10/10. A binary that cannot be launched made this whole gate
+# meaningless, and CI's windows-latest smoke job would have been permanently
+# red. Naming the executable explicitly is also what the CreateProcessW docs
+# recommend over relying on command-line parsing.
+$ok = [LW.Smoke]::CreateProcessW($BinPath, $cmdLine, [IntPtr]::Zero, [IntPtr]::Zero,
         $false, $CREATE_NEW_PROCESS_GROUP, [IntPtr]::Zero, (Split-Path -Parent $BinPath),
         [ref]$si, [ref]$pi)
 if (-not $ok) {

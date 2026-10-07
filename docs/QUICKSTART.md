@@ -7,9 +7,11 @@ stuck here.
 
 ## What you need
 
-- Go 1.26.1 or newer (see `go.mod`), or a released archive from the GitHub releases page.
+- Go 1.26.6 or newer (the `go` line in `go.mod`; older toolchains refuse to build),
+  or a released archive from the GitHub releases page.
 - A plugin folder. LoopWorker runs WebAssembly plugins; it has no built-in task
-  implementations. Section 2 builds one from this repository.
+  implementations. Section 2 installs the demo plugin that ships with a release,
+  or builds one from this repository.
 
 ## 1. Build
 
@@ -17,26 +19,37 @@ stuck here.
 git clone https://github.com/loopgap/loopWorker-for-go.git
 cd loopWorker-for-go
 
-# The server, plus the developer CLIs (loopctl, loopdebug, loopwatch, loopbench, loopsim)
+# The server, plus the one developer CLI (loopctl)
 make build
 ```
 
-Releases ship **only** the `loopworker` binary. The other five are developer tools
-you build yourself — see [CLI Tools](#cli-tools).
+Already unpacked a release? Skip this step and run `loopworker` (on Windows,
+`loopworker.exe`) from the archive — everything after section 1 works the same.
 
-## 2. Build a plugin
+Releases ship the `loopworker` binary and nothing else executable: `loopctl` is a
+developer tool you build yourself — see [CLI Tools](#cli-tools). Alongside the
+docs, the archive also carries `config.example.yaml` and the demo plugin that
+section 2 installs.
+
+## 2. Install a plugin
 
 The server needs at least one plugin directory containing `plugin.json` and a
 `.wasm` module, otherwise every task you submit ends in `dead_letter` with
 `plugin not found`.
 
-```bash
-# examples/hello-plugin is a WASI module that echoes stdin to stdout
-GOOS=wasip1 GOARCH=wasm go build -o hello.wasm ./examples/hello-plugin/
+A working one ships with the release: `examples/hello-plugin` is a WASI module
+that echoes stdin to stdout. From the unpacked release directory:
 
+```bash
 mkdir -p ~/.loopworker/plugins/hello
-cp hello.wasm ~/.loopworker/plugins/hello/
+cp examples/hello-plugin/hello.wasm  ~/.loopworker/plugins/hello/
 cp examples/hello-plugin/plugin.json ~/.loopworker/plugins/hello/
+```
+
+Working from a source checkout instead? Rebuild the module from its source:
+
+```bash
+GOOS=wasip1 GOARCH=wasm go build -o examples/hello-plugin/hello.wasm ./examples/hello-plugin/
 ```
 
 The directory name does not have to match the plugin name in `plugin.json`; the
@@ -58,8 +71,11 @@ consequences follow from that, and both surprise people:
    server will not listen on anything but loopback:
 
    ```
-   loopworker: bind_address: the API would listen on 0.0.0.0:19700 using only an ephemeral bootstrap key
+   loopworker: bind_address: the API would listen on 0.0.0.0:19527 using only an ephemeral bootstrap key
    ```
+
+   That is the process's last words on stderr, and the port in it is the one you
+   actually bound — substitute whatever `server.port` you set.
 
 2. That bootstrap key is not a durable credential. Set your own before anyone
    else can reach the port:
@@ -71,7 +87,7 @@ export LOOPWORKER_API_KEY='choose-a-real-secret'   # what the CLIs send
 ```
 
 `LOOPWORKER_API_KEYS` registers credentials; `LOOPWORKER_API_KEY` is what
-`loopctl` and `loopdebug` authenticate with. A malformed value is a startup
+`loopctl` authenticates with. A malformed value is a startup
 error, not a warning. Roles are `admin`, `operator`, `viewer`.
 
 Full reference: [README — Authentication](../README.md#authentication).
@@ -139,7 +155,7 @@ resolved value and where each one came from.
 | `plugins.dir` | `LOOPWORKER_PLUGINS_DIR` | `~/.loopworker/plugins` |
 | `data.dir` | `LOOPWORKER_DATA_DIR` | `~/.loopworker/data` |
 | `workers.count` | `LOOPWORKER_WORKERS_COUNT` | `4` |
-| `log.level` | `LOOPWORKER_LOG_LEVEL` | `info` |
+| `logging.level` | `LOOPWORKER_LOG_LEVEL` | `info` |
 
 `server.admin_host` is deliberately not configurable. The admin listener exposes
 `/metrics` and `/logs`; moving it to a routable address hands those to anyone who
@@ -169,24 +185,24 @@ None of these are in the release archive or the container image.
 
 | Tool | What it actually does | Needs credentials |
 |---|---|---|
-| `loopworker` | The server, plus `doctor` and `version` | writes do |
-| `loopctl` | `task list/create/get/cancel/delete`, `workflow list/execute`, `status` | all but `status` |
-| `loopdebug` | Task and workflow inspection, `diagnose`, `profile` | all but `diagnose` |
-| `loopwatch` | Polls `GET /api/v1/health` only | no |
-| `loopbench` | Local `time.Sleep` loop — never contacts a server | n/a |
-| `loopsim` | Local `rand` + `time.Sleep` loop — never contacts a server | n/a |
+| `loopworker` | The server, plus `doctor`, `storage backup`, `version` | writes do |
+| `loopctl` | `task list/create/get/cancel/delete`, `workflow list/get/execute`, `status`, `version` | all but `status` |
 
-`loopwatch --metrics` and `--logs` do not work: `/api/v1/metrics` and
-`/api/v1/logs` are not routes. Use the admin listener (section 5). `loopbench`
-and `loopsim` report timings of their own sleep loops — do not cite them as
-product performance.
+`make build` produces exactly these two binaries (`Makefile` 的 `BINARIES :=
+loopworker loopctl`). `loopdebug`、`loopwatch`、`loopbench`、`loopsim` 已删除，
+`cmd/` 下不再有它们 —— 需要时从历史里取回：`git show <rev>:cmd/<name>/main.go`。
 
 ## Docker
 
 ```bash
 # From the repository
 make docker
-docker run --rm -p 19527:19527 loopworker
+# LOOPWORKER_API_KEYS is not optional here: the image listens on 0.0.0.0, and a
+# container with no configured credential exits 1 immediately rather than serving
+# an open API.
+docker run --rm -p 19527:19527 \
+  -e LOOPWORKER_API_KEYS="ops:admin:$(printf '%s' 'choose-a-real-secret' | sha256sum | cut -d' ' -f1)" \
+  loopworker
 
 # From a release
 docker run --rm -p 19527:19527 \
@@ -200,6 +216,38 @@ docker run --rm -p 19527:19527 \
 The image declares `USER 10001:10001`, exposes `19527`, and mounts `/data` as a
 volume — so pass a writable volume or the task database cannot be created. There
 is no default plugin in the image, which is why the example mounts one.
+
+## Linux packages (deb / rpm)
+
+Each release also attaches a `.deb` and a `.rpm` for `amd64` and `arm64`. They
+are **files on the release page, not entries in a Debian or RPM repository** —
+there is no apt source to add, so `apt install loopworker` finds nothing.
+Install the file you downloaded:
+
+```bash
+# Debian / Ubuntu
+sudo apt install ./loopworker_<version>_amd64.deb
+
+# RHEL / Fedora / openSUSE
+sudo dnf install ./loopworker-<version>-1.x86_64.rpm
+```
+
+| Path | What |
+|---|---|
+| `/usr/bin/loopworker` | the server, plus `doctor`, `storage backup` and `version` |
+| `/etc/loopworker/config.example.yaml` | the annotated example configuration |
+| `/var/lib/loopworker/` | an empty data directory, mode `0750`, owned by root |
+| `/usr/share/doc/loopworker/` | `copyright` (the licence), `NOTICE`, `README`, `CHANGELOG`, `QUICKSTART`, `USAGE` |
+
+Two things the package leaves to you, and both are visible in `doctor`:
+
+- **No plugin.** The demo plugin is not in the package, so a package install
+  still needs section 2. Until then `doctor` reports `plugins … is empty`.
+- **The packaged data directory is not the one the server uses.** It defaults to
+  `data.dir = ~/.loopworker/data`, and `/var/lib/loopworker` is root-owned, so
+  an unprivileged service user cannot write to it. A system-wide install means
+  creating a service user, handing it that directory, and pointing `data.dir`
+  and `plugins.dir` at the matching paths.
 
 ## Development
 
@@ -220,5 +268,6 @@ surface to confirm the rate limiter answers.
 ## Support
 
 - [README](../README.md) — features, API reference, authentication
-- [Architecture](architecture.md)
+- [Usage guide](USAGE.md) — SDK examples, plugin authoring, workflows, configuration
+- [API reference](api/api-reference.md)
 - [Issues](https://github.com/loopgap/loopWorker-for-go/issues)

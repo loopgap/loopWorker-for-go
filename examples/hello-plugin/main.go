@@ -6,9 +6,15 @@
 //
 //	GOOS=wasip1 GOARCH=wasm go build -o hello.wasm .
 //
-// (`make examples/hello-plugin/hello.wasm` does exactly that.) The committed
-// hello.wasm is that output, so a customer who only downloaded a release
-// artifact still has something the sandbox can actually run.
+// The committed hello.wasm is a build of this source, so a customer who only
+// downloaded a release still has something the sandbox can actually run. It is
+// deliberately not required to match a fresh build: a compiled module embeds
+// the toolchain that produced it, so every Go upgrade changes the bytes. What is
+// enforced instead is that hello.wasm stays byte-identical to
+// pkg/plugin/testdata/hello.wasm, which the test suite executes through a real
+// WASM runtime — so what a customer runs is always what was tested. To
+// regenerate both, build with the command above and copy the result to each
+// path.
 //
 // Input arrives on stdin and output leaves on stdout — the WASI convention the
 // sandbox relies on. There is no host function here on purpose: this plugin

@@ -3,7 +3,9 @@ package sandbox
 import (
 	"encoding/binary"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -101,18 +103,6 @@ func importFuncSection(module, field string, typeIdx uint32) []byte {
 	body.name(field)
 	body.u8(0x00)
 	body.uleb(typeIdx)
-	return wasmSection(2, body.b)
-}
-
-func importMultiSection(imports [][3]interface{}) []byte {
-	var body blob
-	body.uleb(uint32(len(imports)))
-	for _, imp := range imports {
-		body.name(imp[0].(string))
-		body.name(imp[1].(string))
-		body.u8(0x00)
-		body.uleb(imp[2].(uint32))
-	}
 	return wasmSection(2, body.b)
 }
 
@@ -384,35 +374,95 @@ func writeFixtureFile(t *testing.T, name string, data []byte) string {
 	return path
 }
 
-func writeManifest(t *testing.T, dir string, manifest string) string {
+// realEchoArtifact compiles the example plugin customers are told to use into a
+// WASI module and returns the bytes.
+//
+// Reusing examples/hello-plugin rather than a fixture private to this package
+// is deliberate: these tests then prove the module that ships in the
+// documentation actually executes in the sandbox, instead of proving that some
+// other, near-identical module does.
+func realEchoArtifact(t *testing.T) []byte {
 	t.Helper()
-
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", dir, err)
-	}
-	path := filepath.Join(dir, ManifestFileName)
-	if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
-	return path
+	return buildWasiModule(t, "./examples/hello-plugin")
 }
 
-// realWasmArtifact reads a .wasm produced by a real toolchain from testdata, or
-// returns nil when it is absent. Regenerate the pair with:
+// realSpinArtifact compiles the never-terminating module from testdata/spin.go.
+// It is the one fixture that cannot reuse an existing package, because no
+// in-tree module is hostile on purpose.
+func realSpinArtifact(t *testing.T) []byte {
+	t.Helper()
+	return buildWasiModule(t, "./internal/core/sandbox/testdata/spin.go")
+}
+
+// buildWasiModule compiles arg with the real Go toolchain and returns the module
+// bytes.
 //
-//	GOOS=wasip1 GOARCH=wasm go build -o internal/core/sandbox/testdata/go-wasi-echo.wasm ./echo.go
-//	GOOS=wasip1 GOARCH=wasm go build -o internal/core/sandbox/testdata/go-wasi-spin.wasm ./spin.go
-func realWasmArtifact(t *testing.T, name string) []byte {
+// Fixtures are compiled on demand rather than committed as .wasm binaries: a
+// checked-in binary cannot be kept in sync with the source that produced it, and
+// a stale one silently stops testing what it claims to test — which is worse than
+// having no test, because the coverage still looks present.
+//
+// A build failure fails the test. It is never a skip. These three artifacts are
+// the only ones in the package that execute a genuine WASI module end to end —
+// real runtime, real imports, megabytes of linear memory — so a skip here would
+// quietly remove the only coverage of the product's core promise. It used to
+// skip, against skip messages pointing at source files that were never
+// committed, so the tests could not have run in any clone of this repository.
+func buildWasiModule(t *testing.T, arg string) []byte {
 	t.Helper()
 
-	data, err := os.ReadFile(filepath.Join("testdata", name))
+	out := filepath.Join(t.TempDir(), "artifact.wasm")
+	cmd := exec.Command("go", "build", "-trimpath", "-o", out, arg)
+	cmd.Dir = repoRoot(t)
+	cmd.Env = wasiBuildEnv()
+	if combined, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build %s for wasip1: %v\n%s", arg, err, combined)
+	}
+
+	data, err := os.ReadFile(out)
 	if err != nil {
-		return nil
+		t.Fatalf("read %s: %v", out, err)
 	}
 	if len(data) < 8 || string(data[:4]) != string(wasmMagic) {
-		t.Fatalf("testdata/%s is not a wasm module", name)
+		t.Fatalf("building %s did not produce a wasm module", arg)
 	}
 	return data
+}
+
+// wasiBuildEnv is os.Environ() with GOOS/GOARCH/CGO_ENABLED replaced, so an
+// inherited host setting cannot silently produce a native binary where a WASI
+// module is required. Filtering first rather than appending matters: Windows
+// passes duplicate environment entries through unreconciled.
+func wasiBuildEnv() []string {
+	env := make([]string, 0, len(os.Environ())+3)
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "GOOS=") || strings.HasPrefix(kv, "GOARCH=") || strings.HasPrefix(kv, "CGO_ENABLED=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, "GOOS=wasip1", "GOARCH=wasm", "CGO_ENABLED=0")
+}
+
+// repoRoot walks up from the package directory to the module root so the fixture
+// build does not depend on the caller's working directory.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("no go.mod found above the package directory")
+		}
+		dir = parent
+	}
 }
 
 // egressWasm returns a module whose start function asks the host for url and

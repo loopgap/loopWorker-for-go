@@ -51,6 +51,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
 	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/event"
 	"loopworker/pkg/logger"
@@ -75,7 +76,11 @@ func (tq taskQueue) Swap(i, j int) {
 }
 
 func (tq *taskQueue) Push(x any) {
-	tq.data = append(tq.data, x.(*Task))
+	t, ok := x.(*Task)
+	if !ok {
+		panic(fmt.Sprintf("taskQueue.Push: got %T, want *Task", x))
+	}
+	tq.data = append(tq.data, t)
 }
 
 func (tq *taskQueue) Pop() any {
@@ -748,7 +753,13 @@ func (s *Scheduler) DequeueTask() *Task {
 	if s.queue.Len() == 0 {
 		return nil
 	}
-	return heap.Pop(s.queue).(*Task)
+	t, ok := heap.Pop(s.queue).(*Task)
+	if !ok {
+		// Unreachable unless the heap is handed a non-Task, which only this
+		// type's Push can do — and it panics there rather than pushing one.
+		return nil
+	}
+	return t
 }
 
 func (s *Scheduler) QueueSize() int {

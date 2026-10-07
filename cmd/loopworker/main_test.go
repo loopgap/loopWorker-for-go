@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	lwerrors "loopworker/pkg/errors"
 	"loopworker/version"
 )
 
@@ -131,44 +133,103 @@ func TestLoadConfigFlagBeatsEnvBeatsFile(t *testing.T) {
 	}
 }
 
+// shutdownCredential is the credential the graceful-shutdown half of
+// TestRunServerStartsAndServesHealth drives the admin listener with.
+const shutdownCredential = "lwk_test_admin_credential_for_graceful_shutdown"
+
+// startAndAwaitHealth starts the server on a free port and blocks until
+// /api/v1/health answers. It returns the two base URLs and the channel the
+// server's exit error arrives on.
+//
+// It retries when the port was taken, because freePort cannot be atomic: it
+// binds :0, reads the assigned port and closes the listener, so any other
+// process can take that port in the window before the server binds it. That
+// window is wide — the server still has to read its config and run the startup
+// self-check, which binds two more sockets, before it listens — and under the
+// full-suite coverage run (25 packages, every allocation counted) it produced
+// an intermittent red build whose only symptom was "server exited early" with
+// nothing in the test to explain it. Losing that port race is the harness's
+// problem, not the product's, so it is retried on a fresh pair of ports.
+//
+// Every other early exit is reported as it stands: a server that dies for any
+// other reason is exactly what this test exists to catch.
+func startAndAwaitHealth(t *testing.T) (<-chan error, string, string) {
+	t.Helper()
+	const attempts = 4
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		port := freePort(t)
+		resetFlagState()
+		cmd := newRootForTest(t)
+		cfgFile = ""
+		if err := cmd.Flags().Parse([]string{"--port", fmt.Sprint(port), "--host", "127.0.0.1", "--workers", "2"}); err != nil {
+			t.Fatal(err)
+		}
+
+		// /shutdown lives on the admin listener behind the admin permission, so
+		// this test has to know where that listener is and hold a credential it
+		// accepts. Both come from the environment, which is the documented way to
+		// configure both, and both must be in place before runServer builds the
+		// routers.
+		adminPort := freePort(t)
+		t.Setenv("LOOPWORKER_API_ADMIN_PORT", fmt.Sprint(adminPort))
+		t.Setenv("LOOPWORKER_API_KEYS_PLAIN", "smoke-test:admin:"+shutdownCredential)
+
+		errCh := make(chan error, 1)
+		go func() { errCh <- runServer(cmd, nil) }()
+
+		baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+		deadline := time.Now().Add(20 * time.Second)
+		var health map[string]interface{}
+		portTaken := false
+		// A deadline per request, not just per loop: http.DefaultClient has no
+		// timeout, so a port that is listening but never answers would hang the
+		// poll - and with it the whole test - instead of failing it. The timeout
+		// is short because the server is already up or nothing is listening.
+		client := &http.Client{Timeout: 2 * time.Second}
+		for time.Now().Before(deadline) && !portTaken {
+			resp, err := client.Get(baseURL + "/api/v1/health")
+			if err == nil {
+				body, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					_ = json.Unmarshal(body, &health)
+					break
+				}
+			}
+			select {
+			case err := <-errCh:
+				if errors.Is(err, lwerrors.ErrPortUnavailable) && attempt < attempts {
+					portTaken = true
+				} else {
+					t.Fatalf("server exited early: %v", err)
+				}
+			default:
+			}
+			if !portTaken {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+		if portTaken {
+			t.Logf("port %d was taken before the server could bind it; retrying (attempt %d of %d)", port, attempt, attempts)
+			continue
+		}
+		if health == nil {
+			t.Fatal("/api/v1/health never answered")
+		}
+		return errCh, baseURL, fmt.Sprintf("http://127.0.0.1:%d", adminPort)
+	}
+	t.Fatal("/api/v1/health never answered")
+	return nil, "", ""
+}
+
 func TestRunServerStartsAndServesHealth(t *testing.T) {
 	base := isolate(t)
 	callerDir := t.TempDir()
 	t.Chdir(callerDir)
-	port := freePort(t)
 
-	cmd := newRootForTest(t)
-	cfgFile = ""
-	if err := cmd.Flags().Parse([]string{"--port", fmt.Sprint(port), "--host", "127.0.0.1", "--workers", "2"}); err != nil {
-		t.Fatal(err)
-	}
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- runServer(cmd, nil) }()
-
-	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-	deadline := time.Now().Add(20 * time.Second)
-	var health map[string]interface{}
-	for time.Now().Before(deadline) {
-		resp, err := http.Get(baseURL + "/api/v1/health")
-		if err == nil {
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				_ = json.Unmarshal(body, &health)
-				break
-			}
-		}
-		select {
-		case err := <-errCh:
-			t.Fatalf("server exited early: %v", err)
-		default:
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if health == nil {
-		t.Fatal("/api/v1/health never answered")
-	}
+	errCh, baseURL, adminURL := startAndAwaitHealth(t)
+	adminKey := shutdownCredential
 
 	// Nothing may be dropped in the caller's directory (requirement: no CWD litter).
 	if entries, err := os.ReadDir(callerDir); err != nil {
@@ -186,11 +247,41 @@ func TestRunServerStartsAndServesHealth(t *testing.T) {
 		t.Errorf("task database must live at the configured path %s: %v", db, err)
 	}
 
-	resp, err := http.Post(baseURL+"/shutdown", "", nil)
+	// The public port must NOT be able to stop the server. An unauthenticated
+	// POST to a reachable port is a remote denial of service, so /shutdown moved
+	// to the loopback admin listener behind the admin permission. On the public
+	// listener the path now falls through to the embedded SPA catch-all, which
+	// serves the shell as HTML - never JSON, and never the lifecycle handler.
+	publicShutdown, err := http.Post(baseURL+"/shutdown", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	publicShutdown.Body.Close()
+	if ct := publicShutdown.Header.Get("Content-Type"); strings.Contains(ct, "application/json") {
+		t.Fatalf("public POST /shutdown answered %q: it reached the lifecycle handler instead of the SPA catch-all", ct)
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("public POST /shutdown stopped the server (runServer returned %v); it must answer only on the admin listener", err)
+	case <-time.After(2 * time.Second):
+	}
+
+	// Graceful shutdown, driven the only way it is reachable now: the admin
+	// listener, with an administrator credential.
+	req, err := http.NewRequest(http.MethodPost, adminURL+"/shutdown", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-API-Key", adminKey)
+	adminResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminResp.Body.Close()
+	if adminResp.StatusCode != http.StatusOK {
+		t.Fatalf("admin POST /shutdown = %d, want 200", adminResp.StatusCode)
+	}
 
 	select {
 	case err := <-errCh:
@@ -198,8 +289,17 @@ func TestRunServerStartsAndServesHealth(t *testing.T) {
 			t.Fatalf("runServer returned %v", err)
 		}
 	case <-time.After(25 * time.Second):
-		t.Fatal("server did not stop after /shutdown")
+		t.Fatal("server did not stop after admin POST /shutdown")
 	}
+
+	// A "Shutdown error: ... write manifest ...: path not found" line may appear
+	// on stderr after this point, and it is not a server defect. POST /shutdown
+	// answers immediately and drains in the background (a short sleep exists so
+	// the response is flushed first), while runServer returns as soon as the
+	// listener closes. The test therefore ends - and t.TempDir removes the data
+	// directory - while the drain is still writing its final manifest. Nothing in
+	// a real deployment deletes the data directory underneath a shutting-down
+	// server.
 }
 
 func TestInvalidConfigExitsWithError(t *testing.T) {

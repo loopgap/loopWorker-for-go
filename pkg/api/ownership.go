@@ -87,12 +87,6 @@ func (s *APIServer) authorizeTask(w http.ResponseWriter, r *http.Request, task *
 	return true
 }
 
-// isAdmin reports whether the request's principal holds the admin permission.
-func isAdmin(r *http.Request) bool {
-	principal, ok := security.PrincipalFromContext(r.Context())
-	return ok && principal.HasPermission(security.PermAdmin)
-}
-
 // principalSubject returns the authenticated subject or "anonymous".
 func principalSubject(r *http.Request) string {
 	if principal, ok := security.PrincipalFromContext(r.Context()); ok {

@@ -15,16 +15,6 @@ import (
 )
 
 // storageCmdForTest returns the flag-bearing command the run functions read, mirroring how
-// doctorCmdForTest works: in production cobra merges the root's persistent flags into the
-// subcommand's flag set, and these tests call the RunE directly instead of going through
-// Execute.
-func storageCmdForTest(t *testing.T) *cobra.Command {
-	t.Helper()
-	cmd := newRootForTest(t)
-	cmd.Flags().Bool("json", false, "")
-	return cmd
-}
-
 // seededDataDir returns a data directory holding a real task database with real rows,
 // created through the same configuration path the CLI resolves.
 func seededDataDir(t *testing.T) (dataDir, dbPath string) {

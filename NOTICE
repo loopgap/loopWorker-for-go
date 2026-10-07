@@ -2,11 +2,14 @@ LoopWorker
 Copyright (c) 2026 the LoopWorker authors
 
 This product includes software developed by third parties. The full license
-text of every dependency ships inside the release archive: license texts go
-into `THIRD-PARTY-LICENSES/`, a one-line-per-dependency index goes into
-`THIRD-PARTY-NOTICES.csv`. Both are produced by the `third-party-notices` job
-in .github/workflows/ci.yml. This file records the attribution that the
-Apache-2.0 dependencies require, plus the direct dependency set as a whole.
+text of every dependency is published with each release as a separate download
+(`third-party-notices.tar.gz` on the release page), together with a
+one-line-per-dependency index. They are deliberately not inside the binary
+archive: GoReleaser builds that archive from files committed to this
+repository, and a path that only exists on the release runner would match
+nothing there - which fails the release rather than quietly shipping less. This
+file records the attribution that the Apache-2.0 dependencies require, plus the
+direct dependency set as a whole.
 
 The Go standard library is used under the BSD-3-Clause license, Copyright
 2009 The Go Authors, and is not listed again below.
@@ -31,6 +34,11 @@ github.com/spf13/cobra v1.10.2
   License: Apache-2.0
   Copyright 2013-2023 The Cobra Authors
 
+github.com/spf13/pflag v1.0.10
+  License: BSD-3-Clause
+  Copyright (c) 2012 Alex Ogier. All rights reserved.
+  Copyright (c) 2012 The Go Authors. All rights reserved.
+
 github.com/tetratelabs/wazero v1.12.0
   License: Apache-2.0
   Copyright 2020-2023 wazero authors
@@ -45,7 +53,7 @@ go.yaml.in/yaml/v3 v3.0.4
   Copyright 2011-2016 Rob Pike, Nick Loadgoff
   Copyright 2015-2017 Canonical Ltd.
 
-golang.org/x/crypto v0.55.0
+golang.org/x/crypto v0.56.0
   License: BSD-3-Clause
   Copyright 2009 The Go Authors
 
@@ -66,7 +74,11 @@ Notes
 - Transitive dependencies are not listed individually here. `go list -m all`
   enumerates the full module graph; the release workflow collects the license
   text of each one into THIRD-PARTY-LICENSES/ and indexes them in
-  THIRD-PARTY-NOTICES.csv.
+  THIRD-PARTY-NOTICES.csv, and attaches both to the release.
+- The direct list above is checked against go.mod by `relcheck`
+  (`checkNoticeDirectDependencies`) on every build, because it drifted twice
+  before: a dependency version bump that left the old number here, and a module
+  that became a direct import without being added at all.
 - To regenerate the direct list above after changing go.mod, run
   `go list -m -f '{{if not .Indirect}}{{.Path}} {{.Version}}{{end}}' all`
   and read each module's LICENSE from $(go env GOMODCACHE).

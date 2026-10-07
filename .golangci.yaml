@@ -49,7 +49,12 @@ linters:
       - comments
       - common-false-positives
       - legacy
-      - stdlib-error-handling120+
+      # The preset is spelled `std-error-handling` in golangci-lint v2. It was
+      # written here as `stdlib-error-handling120+`, which is not a preset name
+      # in any version — so v2.9.0 refused to load this file at all and the
+      # `quality` CI job, `make lint` and the pre-release lint item could not
+      # have passed. Nothing caught it because no lint run had ever happened.
+      - std-error-handling
     rules:
       # Tests may ignore returned errors and use context.Background().
       - path: (_test\.go|^integration/)

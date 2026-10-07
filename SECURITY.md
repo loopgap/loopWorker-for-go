@@ -125,6 +125,8 @@ Bugs in the `web/canvas` UI, the developer-only CLIs, and anything under
 supported product surface (`.release/SCOPE-PROPOSAL.md`).
 
 Note what that means in practice: **releases ship only the `loopworker`
-binary**, so the other CLIs (`loopctl`, `loopdebug`, `loopwatch`, `loopbench`,
-`loopsim`) are things you build from source yourself. If you build them, they
-are your code to review, not ours to fix.
+binary**, so `loopctl` is something you build from source yourself — it is not
+in the archive and not in the container image. If you build it, it is your code
+to review, not ours to fix. Four other developer CLIs (`loopdebug`, `loopwatch`,
+`loopbench`, `loopsim`) existed once and were **deleted**; there is no source
+left to build, and the `Removed` section of `CHANGELOG.md` records why.

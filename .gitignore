@@ -1,4 +1,10 @@
 # ==================== Binaries & Compiled Output ====================
+# Build droppings, not sources. One trap worth naming: `go build` with no `-o`
+# writes the binary into the package directory, which is how
+# .release/tools/relcheck/ came to be holding a 4 MB relcheck.exe — invisible
+# to `git status` precisely because the rule below ignores it, and 4 MB of
+# nothing in the source tree. Prefer `go run ./tool` (what CI does) or
+# `go build -o <path>`.
 *.exe
 *.exe~
 *.dll
@@ -82,6 +88,12 @@ logs/
 # Agent drafts / audit output. `_` prefix is ignored by the go toolchain.
 _scratch/
 
+# Runtime leftovers from earlier verification runs. docs/.d1-scratch held a
+# 31 MB binary and a SQLite WAL before this rule existed; catch the pattern, not
+# just the one directory.
+.d*-scratch/
+.d-scratch/
+
 # ==================== Temporary Scripts ====================
 fix_encoding.py
 
@@ -89,39 +101,3 @@ fix_encoding.py
 .*_fmt.txt
 .fmt_*.go
 *.tmpfmt
-
-# ==================== Go ====================
-# Binaries
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-bin/
-
-# Test binary
-*.test
-
-# Output of go coverage tool
-*.out
-coverage.html
-
-# Go workspace file
-go.work
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Build
-dist/
-build/
-
-# Logs
-*.log

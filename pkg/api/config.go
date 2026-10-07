@@ -84,6 +84,21 @@ type Config struct {
 
 	// ServeStatic exposes the embedded web canvas on the public listener.
 	ServeStatic bool
+
+	// AdminControl carries the host-owned lifecycle handlers. Nil means this
+	// build exposes neither /shutdown nor /statusz on the admin listener.
+	AdminControl AdminControl
+
+	// LocalTrust serves the public API without a credential, attributing every
+	// request to a single synthetic local operator.
+	//
+	// The host sets this only when the operator disabled security.auth_required
+	// AND the listener is loopback-bound (see pkg/server). ValidateBindAddress
+	// independently refuses to start a server on a public interface without real
+	// credentials, so this flag cannot open an unauthenticated API to a network.
+	// It never applies to the admin listener, which keeps requiring an
+	// administrator credential for metrics, statistics and POST /shutdown.
+	LocalTrust bool
 }
 
 // DefaultConfig returns the secure-by-default configuration.
@@ -161,6 +176,18 @@ func WithAdminListener(bind string, port int) Option {
 
 // WithStaticCanvas serves the embedded web UI on the public listener.
 func WithStaticCanvas(enable bool) Option { return func(dst *Config) { dst.ServeStatic = enable } }
+
+// WithLocalTrust serves the public API without a credential.
+//
+// Only the host may call this, and only after checking both that the operator
+// disabled security.auth_required and that the listener is loopback-bound. It is
+// not a general "disable auth" switch: ValidateBindAddress still refuses to
+// serve on a public interface without real credentials, and the admin listener
+// ignores this flag entirely.
+func WithLocalTrust(enable bool) Option { return func(dst *Config) { dst.LocalTrust = enable } }
+
+// WithAdminControl installs the host-owned lifecycle handlers.
+func WithAdminControl(c AdminControl) Option { return func(dst *Config) { dst.AdminControl = c } }
 
 // WithEnvOverrides applies LOOPWORKER_API_* environment overrides.
 func WithEnvOverrides() Option {

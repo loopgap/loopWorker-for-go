@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -60,6 +61,63 @@ func TestConcurrentExecuteOfTheSameWorkflowIsRefused(t *testing.T) {
 	if wf.GetStatus() != WorkflowCompleted {
 		t.Errorf("status after the surviving run = %v, want completed", wf.GetStatus())
 	}
+}
+
+// TestStepDependencyCheckDoesNotRaceWithStepRegistration pins the locking
+// discipline of checkDependencies. It reads Workflow.StepStatus, the same map
+// that AddStep writes when it registers a step under w.mu, so an unlocked read
+// is a genuine data race against any caller that adds a step while a run is in
+// flight.
+//
+// AddStep is exported and takes no execMu, so "add a step during a run" is
+// reachable from outside the package today - the server itself only registers at
+// startup. This test drives exactly that interleaving so the read stays locked.
+//
+// Run under -race. Before checkDependencies read through GetStepStatus this
+// reported a race between workflow.go:439 (the read) and workflow.go:229
+// (AddStep's write).
+func TestStepDependencyCheckDoesNotRaceWithStepRegistration(t *testing.T) {
+	engine := NewWorkflowEngine()
+	wf := NewWorkflow("raced-deps", "Raced")
+	// A dependent step is what forces checkDependencies to read the map at all;
+	// without DependsOn the loop body never executes.
+	wf.AddStep(&Step{
+		ID:        "second",
+		DependsOn: []string{"first"},
+		Action:    func(context.Context, map[string]interface{}) (map[string]interface{}, error) { return nil, nil },
+	})
+	wf.AddStep(&Step{
+		ID:     "first",
+		Action: func(context.Context, map[string]interface{}) (map[string]interface{}, error) { return nil, nil },
+	})
+	engine.Register(wf)
+
+	// Repeatedly run the workflow while a second goroutine registers more steps
+	// on the same instance. Both touch wf.StepStatus: the run reads it in
+	// checkDependencies, the registration writes it in AddStep.
+	// Both loops are bounded on purpose: an unbounded adder grows StepOrder
+	// faster than computeExecutionOrder can walk it, and the test hangs instead
+	// of racing. 400 registrations against 40 runs keeps the two goroutines
+	// interleaved without letting the workflow grow without limit.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 400; i++ {
+			wf.AddStep(&Step{
+				ID:     fmt.Sprintf("extra-%d", i),
+				Action: func(context.Context, map[string]interface{}) (map[string]interface{}, error) { return nil, nil },
+			})
+		}
+	}()
+
+	for i := 0; i < 40; i++ {
+		if err := engine.Execute(context.Background(), "raced-deps"); err != nil {
+			wg.Wait()
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+	wg.Wait()
 }
 
 // TestWorkflowRunsAgainAfterFinishing proves the guard is a concurrency lock, not

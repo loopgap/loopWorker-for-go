@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
 	lwerrors "loopworker/pkg/errors"
 	"loopworker/pkg/logger"
 )
@@ -295,6 +296,7 @@ func (s *LocalEventStore) readManifest() (*manifest, error) {
 	var m manifest
 	if err := json.Unmarshal(data, &m); err != nil {
 		// A torn manifest is recoverable: the segment files are the source of truth.
+		//nolint:nilerr // a torn index is deliberately treated as "no index yet"
 		return nil, nil
 	}
 	if m.Version > manifestVersion {
@@ -530,7 +532,7 @@ func (s *LocalEventStore) enforceRetentionLocked() error {
 	for i, seg := range s.m.Sealed {
 		expired := cutoff > 0 && seg.LastNS < cutoff
 		drop := expired
-		if !drop && over() && !(i == len(s.m.Sealed)-1 && s.m.Current.Events == 0) {
+		if !drop && over() && (i != len(s.m.Sealed)-1 || s.m.Current.Events != 0) {
 			drop = true
 		}
 		if drop {
@@ -847,7 +849,7 @@ func classifyWriteErr(op string, err error) error {
 			"events written since are NOT persisted. Set events.max_age, events.max_events or events.max_total_bytes "+
 			"so it cannot fill up again: %v", op, ErrDiskFull, err)
 	}
-	return fmt.Errorf("event store: %s: %w: %v", op, lwerrors.ErrDatabaseError, err)
+	return fmt.Errorf("event store: %s: %w: %w", op, lwerrors.ErrDatabaseError, err)
 }
 
 func isNoSpace(err error) bool {

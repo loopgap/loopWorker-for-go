@@ -2,8 +2,6 @@ package api
 
 import (
 	"net/http"
-
-	"loopworker/pkg/security"
 )
 
 // failureWriter adapts the envelope to security.AuthFailureWriter so 401/403
@@ -21,9 +19,4 @@ func (s *APIServer) writeFailure(w http.ResponseWriter, r *http.Request, status 
 	}
 	body := &ErrorBody{Code: ErrorCode(code), Message: message, Details: details}
 	writeJSON(w, r, status, Envelope{Success: false, Error: body})
-}
-
-// principalOf returns the caller attached by the auth middleware.
-func principalOf(r *http.Request) (*security.Principal, bool) {
-	return security.PrincipalFromContext(r.Context())
 }

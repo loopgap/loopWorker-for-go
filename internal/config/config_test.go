@@ -401,5 +401,64 @@ func write(t *testing.T, path, content string) {
 	}
 }
 
+// A config file in a directory the loader does not scan has no other symptom:
+// the server starts on defaults and the setting quietly does nothing. The
+// searched directories are what make that answerable.
+func TestNoConfigFileReportsWhereItLooked(t *testing.T) {
+	clearEnv(t)
+	t.Setenv(EnvConfig, "")
+	// Point the work dir at an empty directory so the result does not depend on
+	// whether the repository or the developer's home holds a config.yaml.
+	empty := t.TempDir()
+	t.Setenv(EnvWorkDir, empty)
+
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatalf("running without a config file is not an error: %v", err)
+	}
+	if cfg.ConfigFile() != "" {
+		t.Fatalf("expected no config file to be found, got %q", cfg.ConfigFile())
+	}
+	dirs := cfg.SearchedPaths()
+	if len(dirs) == 0 {
+		t.Fatal("SearchedPaths must report the directories that were scanned, otherwise a misplaced config file is unanswerable")
+	}
+	if !containsString(dirs, ".") {
+		t.Errorf("expected the working directory among %v", dirs)
+	}
+	if !containsString(dirs, empty) {
+		t.Errorf("expected the configured work dir %q among %v", empty, dirs)
+	}
+}
+
+// When a file is found there was no search to report, and an explicit --config
+// path is answered directly, so both must leave SearchedPaths empty.
+func TestSearchedPathsEmptyWhenAFileWasFound(t *testing.T) {
+	clearEnv(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	write(t, path, "server:\n  port: 8123\n")
+
+	cfg, err := Load(Options{ConfigFile: path})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.ConfigFile() != path {
+		t.Fatalf("expected %q, got %q", path, cfg.ConfigFile())
+	}
+	if dirs := cfg.SearchedPaths(); len(dirs) != 0 {
+		t.Errorf("SearchedPaths = %v, want empty when the file was located", dirs)
+	}
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
 // jsonPath escapes a Windows path so it can be embedded in a JSON string.
 func jsonPath(p string) string { return strings.ReplaceAll(p, `\`, `\\`) }

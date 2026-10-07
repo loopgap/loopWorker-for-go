@@ -225,6 +225,7 @@ func (pm *PluginManager) UnloadPlugin(ctx context.Context, name string) error {
 	delete(pm.loaded, name)
 	pm.mu.Unlock()
 
+	//nolint:contextcheck // unloading uses its own shutdown context so a cancelled caller still frees the module
 	if err := pm.sandbox.UnloadPlugin(name); err != nil {
 		return fmt.Errorf("unload from sandbox: %w", err)
 	}

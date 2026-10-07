@@ -2,9 +2,10 @@
 # govulncheck (CI job `quality`) which scans for *known* vulnerabilities, while
 # Dependabot handles version drift and ecosystem updates.
 #
-# TODO(owner): raise a PR against the org if you want grouped weekly updates
-# instead of daily; the limits below are deliberately small so an unattended
-# repo cannot drown a single maintainer in PRs (support debt = tickets).
+# The limits below are deliberately small so an unattended repo cannot drown a
+# single maintainer in PRs (support debt = tickets). Grouped weekly updates are
+# already configured below; a note here used to ask the owner to open a PR for
+# exactly that, which the config had been doing for some time.
 
 version: 2
 updates:

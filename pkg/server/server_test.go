@@ -150,12 +150,16 @@ func TestWorkersCountIsHonoured(t *testing.T) {
 }
 
 func TestEnsureDirsRefusesEmptyPath(t *testing.T) {
-	err := EnsureDirs(filepath.Join(t.TempDir(), "ok"), "")
+	data := filepath.Join(t.TempDir(), "data")
+	err := EnsureDirs(data, "")
 	if err == nil || !strings.Contains(err.Error(), "empty directory path") {
 		t.Fatalf("empty directory must be a loud error, got %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(t.TempDir(), "ok")); err == nil {
-		// the first argument is a fresh path in a temp dir; nothing to assert
+	// The refusal has to come before anything is created. This block used to
+	// stat an unrelated fresh temp dir and asserted nothing at all, so a
+	// half-configured server leaving an empty data directory behind went unseen.
+	if _, statErr := os.Stat(data); !os.IsNotExist(statErr) {
+		t.Errorf("a refused EnsureDirs must not create %s (stat error: %v)", data, statErr)
 	}
 }
 
@@ -201,13 +205,27 @@ func TestStartServesAndReportsRealHealth(t *testing.T) {
 		t.Errorf("state = %q", health.State)
 	}
 
-	statusResp, err := http.Get(base + "/statusz")
+	// /statusz is no longer on the public listener: it moved to the admin one,
+	// behind the admin credential. The public port must answer it with the SPA
+	// shell, not the status document; the document itself is unchanged, so it
+	// is asserted through the handler.
+	publicStatus, err := http.Get(base + "/statusz")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer statusResp.Body.Close()
+	publicStatus.Body.Close()
+	if strings.HasPrefix(publicStatus.Header.Get("Content-Type"), "application/json") {
+		t.Errorf("public GET /statusz = %d %s, want the SPA catch-all: it moved to the admin listener",
+			publicStatus.StatusCode, publicStatus.Header.Get("Content-Type"))
+	}
+
+	statusRec := httptest.NewRecorder()
+	srv.StatusHandler()(statusRec, httptest.NewRequest(http.MethodGet, "/statusz", nil))
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("StatusHandler = %d", statusRec.Code)
+	}
 	var status StatusResponse
-	if err := json.NewDecoder(statusResp.Body).Decode(&status); err != nil {
+	if err := json.NewDecoder(statusRec.Body).Decode(&status); err != nil {
 		t.Fatal(err)
 	}
 	if status.Status != "running" || status.Components["sandbox"] == "" {
@@ -395,9 +413,13 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 
 	// A second server needs its own database: one database is served by one
-	// process, by design, and New refuses to share it. Without a key it mints the
-	// ephemeral bootstrap credential, so it serves an anonymous probe too - but
-	// an authenticated route without any key must not return 200.
+	// process, by design, and New refuses to share it.
+	//
+	// security.auth_required=false on a loopback listener is the operator saying
+	// "this is my own machine, do not make me configure anything", so the API is
+	// served anonymously and a credential is optional rather than mandatory. The
+	// bootstrap key is still minted, because the admin listener keeps demanding
+	// one and nothing about a configured deployment changes.
 	noKeyCfg := cfg
 	noKeyCfg.Data.Dir = filepath.Join(t.TempDir(), "data")
 	noKeyCfg.Security.AuthRequired = false
@@ -405,13 +427,29 @@ func TestAuthMiddleware(t *testing.T) {
 	noKey := newTestServer(t, noKeyCfg)
 	bootKey, _ := noKey.components.APIServer.Authenticator().BootstrapKey()
 	if bootKey == "" {
-		t.Error("with no configured key the server must fall back to the ephemeral bootstrap key, not to anonymous access")
+		t.Error("even in local trust mode the bootstrap key must exist for the admin listener")
 	}
-	if code := do2(noKey.handler(), "/api/v1/workers"); code == http.StatusOK {
-		t.Error("an authenticated route answered 200 with no credential at all")
+	if code := do2(noKey.handler(), "/api/v1/workers"); code != http.StatusOK {
+		t.Errorf("local trust mode: anonymous /api/v1/workers got %d, want 200", code)
 	}
 	if code := doHeader(noKey.handler(), "/api/v1/workers", "X-API-Key", bootKey); code != http.StatusOK {
 		t.Errorf("bootstrap key got %d, want 200", code)
+	}
+
+	// The other half of the contract, and the half that keeps this from becoming
+	// an open API: local trust needs all three conditions - auth switched off, no
+	// credential configured, loopback bind. Configuring a key must always make
+	// that key take effect, even with auth_required=false.
+	keyedCfg := cfg
+	keyedCfg.Data.Dir = filepath.Join(t.TempDir(), "data")
+	keyedCfg.Security.AuthRequired = false
+	keyedCfg.Security.APIKey = "a-configured-key-1234567890"
+	keyed := newTestServer(t, keyedCfg)
+	if code := do2(keyed.handler(), "/api/v1/workers"); code == http.StatusOK {
+		t.Error("with a configured API key an authenticated route must not answer 200 without presenting it")
+	}
+	if code := doHeader(keyed.handler(), "/api/v1/workers", "X-API-Key", "a-configured-key-1234567890"); code != http.StatusOK {
+		t.Errorf("the configured key got %d, want 200", code)
 	}
 }
 

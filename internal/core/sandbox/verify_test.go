@@ -166,10 +166,7 @@ func TestAuditMalformedSectionIsRejected(t *testing.T) {
 }
 
 func TestAuditRealToolchainArtifact(t *testing.T) {
-	artifact := realWasmArtifact(t, "go-wasi-echo.wasm")
-	if artifact == nil {
-		t.Skip("testdata/go-wasi-echo.wasm missing; build it with GOOS=wasip1 GOARCH=wasm")
-	}
+	artifact := realEchoArtifact(t)
 
 	path := writeFixtureFile(t, "go-echo.wasm", artifact)
 

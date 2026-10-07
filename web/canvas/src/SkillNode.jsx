@@ -1,6 +1,6 @@
 import React from 'react';
-import { Handle, Position } from 'reactflow';
-import { Sparkles, CheckCircle, Play, XCircle, AlertCircle } from 'lucide-react';
+import { Handle, Position } from '@xyflow/react';
+import { Sparkles, CheckCircle, Play, XCircle } from 'lucide-react';
 
 export default function SkillNode({ data }) {
   const skill = data.skill || {};

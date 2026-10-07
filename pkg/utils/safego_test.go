@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	lwerrors "loopworker/pkg/errors"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	lwerrors "loopworker/pkg/errors"
 )
 
 // mockLogger 用于测试的并发安全logger

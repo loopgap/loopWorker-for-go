@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,15 +14,18 @@ import (
 )
 
 // artifactDigest is what a correctly published manifest declares: the sha256 of
-// the bytes actually shipped. It is computed from the fixture rather than pasted
-// as a constant so the "matching digest" case cannot rot when testdata changes.
+// the bytes actually shipped. It is computed from the same fixture the writer
+// emits rather than pasted as a constant, so the "matching digest" case cannot
+// rot when the fixture changes.
+//
+// It hashes minimalWasm rather than testdata/hello.wasm because these tests are
+// about whether the manager compares a manifest against the bytes it loaded,
+// not about which module those bytes are. The real artifact's identity is
+// pinned separately by TestShippedHelloPluginIsTheTestedArtifact, and the real
+// artifact is still executed by the manifest-limits tests.
 func artifactDigest(t *testing.T) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", "hello.wasm"))
-	if err != nil {
-		t.Fatalf("read testdata/hello.wasm: %v", err)
-	}
-	sum := sha256.Sum256(data)
+	sum := sha256.Sum256(minimalWasm)
 	return hex.EncodeToString(sum[:])
 }
 

@@ -177,6 +177,72 @@ func TestB2ViewerCannotMutateTasks(t *testing.T) {
 	env.expectCode(w, http.StatusForbidden, CodeForbidden)
 }
 
+// TestB2ForbiddenCarriesActionableGuidance pins what an integrator actually
+// reads when a role is too narrow, which is the commonest rejection this server
+// produces. The test above only required the word "Fix:" somewhere in the
+// message; that is far too loose to notice a real regression, because the parts
+// that matter are the ones a caller branches on:
+//
+//   - the message names the role that was refused and the permission it lacked,
+//     so a reader does not have to guess which of the three roles to swap in;
+//   - details.role and details.required_permission are machine-readable;
+//   - details.permissions_for_role says what the refused role *can* do, which
+//     is the answer to "so what can I call with this key?".
+//
+// Dropping the details map would break every client that surfaces role advice,
+// and nothing else in the suite would notice.
+func TestB2ForbiddenCarriesActionableGuidance(t *testing.T) {
+	env := newTestEnv(t)
+
+	w := env.call(roleViewer, http.MethodPost, "/api/v1/tasks", `{"type":"viewer-task"}`)
+	env.expectCode(w, http.StatusForbidden, CodeForbidden)
+
+	envW := decodeEnvelope(t, w)
+	msg := envW.Error.Message
+	if !strings.Contains(msg, roleViewer) {
+		t.Errorf("403 message must name the refused role %q, got: %q", roleViewer, msg)
+	}
+	if !strings.Contains(msg, "Fix:") {
+		t.Errorf("403 message must carry a remedy, got: %q", msg)
+	}
+
+	details := envW.Error.Details
+	if details == nil {
+		t.Fatalf("403 must carry details: %s", w.Body.String())
+	}
+	if got := details["role"]; got != roleViewer {
+		t.Errorf("details.role: want %q, got %v", roleViewer, got)
+	}
+	required, _ := details["required_permission"].(string)
+	if required == "" {
+		t.Fatalf("details.required_permission must name the missing permission, got %v", details["required_permission"])
+	}
+	if !strings.Contains(msg, required) {
+		t.Errorf("message must name the required permission %q it reports in details, got: %q", required, msg)
+	}
+	granted, ok := details["permissions_for_role"].([]any)
+	if !ok || len(granted) == 0 {
+		t.Errorf("details.permissions_for_role must list what the refused role can do, got %v", details["permissions_for_role"])
+	}
+}
+
+// The other half of the same contract: a request with no credential at all must
+// be told both header forms the authenticator accepts. A customer wiring up
+// their first request reads this string and nothing else.
+func TestB2UnauthorizedNamesBothCredentialHeaders(t *testing.T) {
+	env := newTestEnv(t)
+
+	w := env.call(roleNone, http.MethodGet, "/api/v1/tasks", "")
+	env.expectCode(w, http.StatusUnauthorized, CodeUnauthorized)
+
+	msg := decodeEnvelope(t, w).Error.Message
+	for _, want := range []string{"Authorization: Bearer", "X-API-Key", "Fix:"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("401 message must mention %q, got: %q", want, msg)
+		}
+	}
+}
+
 func TestB2ViewerCannotDeleteTasks(t *testing.T) {
 	env := newTestEnv(t)
 	id := env.createTask(roleOperator, "owned", "")
@@ -241,6 +307,78 @@ func TestB2AdminCanIssueAndRevokeKeys(t *testing.T) {
 	env.Router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked key must stop working, got %d", rec.Code)
+	}
+}
+
+// TestB2RevokingAKeyWithdrawsItsIssuedTokens covers the half of key
+// revocation that has no other test. The key itself stops authenticating —
+// that is the test above — but a bearer token minted from it keeps a second
+// check: AuthenticateBearer looks the source key up by the token's subject, so
+// a key that is gone withdraws every token it ever issued. Worth pinning,
+// because the mechanism is invisible at RevokeKey: it deletes from byID and
+// byHash and never touches the revoked set that its own comment names.
+//
+// It also pins which error that withdrawal reports. A revoked key is not an
+// expired one, and TOKEN_EXPIRED tells the reader to "request a fresh bearer
+// token, or reload an unexpired API key" — advice that cannot possibly work
+// when the key it names was the thing just withdrawn. TOKEN_INVALID is the code
+// whose documented meaning already covers this ("unknown, revoked or
+// malformed").
+func TestB2RevokingAKeyWithdrawsItsIssuedTokens(t *testing.T) {
+	env := newTestEnv(t)
+
+	w := env.call(roleAdmin, http.MethodPost, "/api/v1/auth/keys", `{"name":"incident","role":"viewer"}`)
+	env.expectOK(w, http.StatusCreated)
+	issued := env.data(w)
+	keyID, _ := issued["id"].(string)
+	plaintext, _ := issued["api_key"].(string)
+	if keyID == "" || plaintext == "" {
+		t.Fatalf("issue must return the id and the one-time plaintext: %s", w.Body.String())
+	}
+
+	// Exchange the key for a bearer token while the key is still good.
+	w = env.call(roleAdmin, http.MethodPost, "/api/v1/auth/token", `{"api_key":"`+plaintext+`"}`)
+	env.expectOK(w, http.StatusOK)
+	token, _ := env.data(w)["access_token"].(string)
+	if token == "" {
+		t.Fatalf("token exchange returned no access_token: %s", w.Body.String())
+	}
+
+	// Before revocation the token works, so a later rejection is the
+	// revocation's doing and not a token that was never valid.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/whoami", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	env.Router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("freshly issued token must authenticate: %d %s", rec.Code, rec.Body.String())
+	}
+
+	env.expectOK(env.call(roleAdmin, http.MethodDelete, "/api/v1/auth/keys/"+keyID, ""), http.StatusOK)
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/auth/whoami", nil)
+	req.Header.Set("X-API-Key", plaintext)
+	rec = httptest.NewRecorder()
+	env.Router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked key must stop working, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/auth/whoami", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	env.Router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoking a key must withdraw the tokens it issued, got %d: %s", rec.Code, rec.Body.String())
+	}
+	envelope := env.decode(rec)
+	if envelope.Error == nil {
+		t.Fatalf("a 401 must carry an error object: %s", rec.Body.String())
+	}
+	if envelope.Error.Code != CodeTokenInvalid {
+		t.Errorf("withdrawn token reports %s, want TOKEN_INVALID: a revoked key is not an expired one, "+
+			"and TOKEN_EXPIRED's remedy tells the reader to reload an unexpired API key — the one that no longer exists",
+			envelope.Error.Code)
 	}
 }
 

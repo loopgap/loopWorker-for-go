@@ -1,117 +1,152 @@
-# SCOPE-PROPOSAL — what to stop shipping (one page, for human approval)
+# SCOPE — what ships, what was cut, and what is still open
 
-Status: **proposal**. Nothing in this repository was deleted. Every item below is
-already excluded from release artifacts (`.goreleaser.yaml` ships only the
-`loopworker` binary; `web/canvas` is excluded from the Docker build context and
-from the archives), so approving this changes packaging and docs, not history.
+Status: **current as of 2026-10-06.** Every "Still open" item below is a real,
+unimplemented gap. Everything under "Settled" was verified against the code in
+this tree, not against an earlier plan.
 
 Business frame: this product must survive with **zero after-sales support**. Each
 item below is judged by one question — "does this generate tickets we cannot
 answer?" — not by how much code it is.
 
-## Cut from the shipped product
+## Settled
 
-### 1. `web/canvas` (Vite/React "liquid glass" UI) — cut
+### The four dev-scratch CLIs are gone — verified
+`loopbench` and `loopsim` never imported `pkg/client` and made no HTTP call; they
+slept locally and printed a table, which is indistinguishable from a fake
+benchmark to a buyer. `loopdebug` and `loopwatch` did call the API — `loopdebug`
+used `GetTask` and `GET /api/v1/workflow/{id}`, `loopwatch` used `HealthCheck`
+plus `GetMetrics`/`GetLogs`, the latter two being calls with no route behind them
+(`pkg/client/client_test.go:TestGetMetricsHasNoRoute` pins that for `/metrics`).
+They were cut as duplicates of work `loopctl` already does, not because they
+were unreachable. All four directories are deleted. `cmd/` now holds
+`loopworker` (the product) and `loopctl` (the one dev CLI whose commands are all
+live routes, and which has `cmd/loopctl/main_test.go`). Recover the old sources
+with `git show <rev>:cmd/<name>/main.go`.
 
-* What it is: `web/canvas/**` (React SPA, `package.json`, node_modules-sized
-  toolchain) plus its pre-built copy embedded by the server
-  (`pkg/api/api.go`: `//go:embed all:dist` → `pkg/api/dist`).
-* Verified defect: the catch-all handler rewrites extension-less paths to
-  `/dist/index.html` and hands them to `http.FileServer`, which 301-redirects
-  `.`-prefixed paths back on themselves — `/` is an infinite redirect loop. A
-  customer's first click on the product landing page spins.
-* Support cost: it is the only GUI promise in `README.md` ("Liquid Glass UI"),
-  so every cosmetic bug becomes a ticket, and it is unsuportable: no tests, no
-  build in CI, no owner.
-* Proposal: (a) stop serving `/` from the server, keep only `/api/v1/*` +
-  `/metrics`; (b) delete `web/canvas` + `pkg/api/dist` and drop the `go:embed`
-  once the code owner agrees; (c) remove the UI claim from README/SECURITY/SUPPORT.
-* Blocked on: an **integration request** — `pkg/api/api.go` must drop the embed
-  and the catch-all route. Until then the archives simply do not include the UI
-  sources, and `SUPPORT.md` states the UI is out of scope.
+### The canvas landing page is fixed — verified
+An earlier revision of this file reported that `GET /` was an infinite redirect
+loop. It is not. `pkg/api/api.go` reads `dist/index.html` once at init and
+serves those bytes directly, because `http.FileServer` 301-redirects any path
+ending in `/index.html` back to itself. See `canvasIndex` and
+`pkg/api/static_test.go`.
 
-### 2. `loopbench`, `loopsim` — cut (dev toys, not tools)
+### The documented YAML config schema is the one that loads — verified
+An earlier revision reported that `cmd/loopworker/main.go` parsed flat JSON keys
+while `config/config.example.yaml` used nested keys. It does not: `main.go:112`
+calls `config.Load(config.Options{ConfigFile: cfgFile, Flags: overrides(cmd)})`,
+which implements the nested schema in `internal/config/load.go`.
 
-* Verified: neither imports `pkg/client` nor makes any HTTP call; they only
-  `time.Sleep` locally (`cmd/loopbench/main.go:114`, `cmd/loopsim/main.go:144,244`)
-  and print a table.
-* They are indistinguishable from a fake benchmark to a buyer, and "your
-  benchmark says 10k/s while production does 200/s" is a ticket.
-* Proposal: keep in-repo for developer use, never packaged (already the case);
-  remove from README's feature list.
+### `LoadOptions.Allowlist` is not a thing — verified
+An earlier revision implied digest pinning by allowlist. `LoadOptions.Allowlist`
+was removed; `RequireChecksum` and the manifest digest are the whole story.
 
-### 3. `loopctl`, `loopdebug` — cut or fix, do not ship broken
+### `loopctl` could not read a single workflow — closed
+`GET /api/v1/workflow/{workflowID}` is registered on the `authed` group
+(`pkg/api/api.go:204`), and `loopctl` had `workflow list` and `workflow execute`
+but no `get`, so a single workflow was readable only with curl. `pkg/client` now
+has `GetWorkflow` and `loopctl workflow get [workflow-id]` exists, with tests for
+the success path, the 404 path, and a guard that `loopctl workflow --help` cannot
+promise a command the binary does not have — the help string used to advertise
+both `create` (deliberately absent) and `get` (missing).
 
-* Verified 404s (routes that do not exist in `pkg/api/api.go`'s
-  `registerRoutes`): `POST /api/v1/tasks/{id}/cancel`, `POST /api/v1/workflow`,
-  `GET|POST /api/v1/config` (`cmd/loopctl/main.go:132,202,254,289`), and
-  `GET /api/v1/workflow/{id}` (`cmd/loopdebug/main.go:147,175`).
-  The server exposes `/api/v1/workflow/list|graph|execute`, `/api/v1/tasks*`,
-  `/metrics`, `/logs`, `/health` — nothing else.
-* So the "CLI management tool" advertised in docs fails against the real API.
-* Proposal: prefer cutting both from the shipped surface and documenting
-  `curl`/`pkg/client` as the interface. If a CLI is commercially necessary, the
-  owner must first (a) add the missing endpoints or (b) repoint the CLI at the
-  existing ones, and the boot-smoke gate must assert those calls return 2xx.
-* Integration request: see below.
+## Still open
 
-### 4. `docs/product/*.md` and `.workbuddy/` — cut from anything customer-facing
+### No real-browser end-to-end check of the canvas — still open
+An earlier revision of this file said nothing automated covered the GUI. That is
+no longer true and the revision was wrong: the canvas shipped eight defects —
+node cards reading Go field names against a lower-case JSON API, a plain-text
+payload run through `atob()` which threw `InvalidCharacterError` and took the
+details panel down, a `fetchGraph` that refetched forever because its
+`useCallback` depended on unstable setters, a probe guard that could never
+release, no request timeout, React Flow v11 against React 19, SSE tasks created
+outside the canvas never appearing, and Escape not closing the panel — all of it
+under a green CI, because the workflows contained no frontend step at all.
 
-* Internal AI-persona planning notes (e.g. `gap-audit-and-prd.md`,
-  `delivery-progress-report.md`) that disclose the developer's local filesystem
-  path and admit "`P0`: go build 失败".
-* Harm today: they are inside the repo a buyer clones, so (a) a personal absolute
-  path leaks, (b) a document that says the build fails destroys trust in the
-  artifact, and (c) they read like a roadmap of unbuilt features → tickets.
-* Proposal: move to a private planning space (or delete). At minimum they stay
-  out of the release archives (they already are) and out of README links.
-  NOTE: `.gitignore` does not list `docs/product/` or `.workbuddy/`, so removal
-  is a git-history question for the owner, not something to hide with ignore rules.
+There are now jsdom tests in `web/canvas/src/api.test.js` and
+`web/canvas/src/App.test.jsx`, plus a `canvas` job in `ci.yml` that lints, tests,
+builds and diffs `web/canvas/dist` against the committed `pkg/api/dist`.
 
-### 5. Nested `config` semantics — ship one honest story
+What those tests still cannot do, and why this item stays open: jsdom renders the
+component tree, not a browser. Node geometry and pan and zoom are out of reach
+until a human opens a tab, and `PRE-RELEASE-CHECKLIST.md` keeps those steps by
+hand. If this product ever takes money, that is the first gap to close.
 
-* Verified: `config/config.example.yaml` uses nested keys (`server.port`,
-  `plugins.dir`), while `internal/config.LoadConfig` (what `cmd/loopworker/main.go`
-  calls today) parses **flat JSON keys** and only when `--config` is given.
-  `internal/config.Load` in `load.go` implements the nested YAML schema but is not
-  yet wired into the binary.
-* Result: a customer copies the example file, runs `loopworker --config`, and gets
-  a parse error or silently ignored settings. That is the single most predictable
-  support ticket in the product.
-* Proposal: until `main.go` calls `config.Load`, the docs and CHANGELOG describe
-  only `LOOPWORKER_*` env vars + flags as supported (this is what CHANGELOG.md now
-  says), and `config.example.yaml` is labelled as the target schema, not the
-  current one.
+The live-update path is no longer part of that gap, on either side:
 
-## Keep (this is the product)
+- **Server.** `pkg/api/handlers_events_test.go` opens `GET /api/v1/events/live`
+  on a real listener and asserts the frame format end to end — `event: <type>` /
+  `data: <json>` — plus the headers an intermediary needs, the `?types=` filter,
+  the cross-tenant substitution, and that a disconnect returns the stream's slot
+  in the limiter. That file did not exist before; the endpoint had only a 503
+  entry for a missing event bus and a test proving the response writer exposes a
+  Flusher. Both critical assertions were mutation-checked.
+- **Client.** The canvas does not use `EventSource` (it cannot send a header); it
+  parses frames itself with a fetch streaming reader. The one stream test fed it
+  a single chunk, leaving the buffer accumulation, the `\r` strip and the
+  multi-line `data` join untested. All three are now covered and each was
+  mutation checked.
 
-* `cmd/loopworker` — the server binary; the only thing in release artifacts.
-* `pkg/api`, `pkg/server`, `pkg/client`, `pkg/event`, `pkg/workflow`,
-  `pkg/errors`, `pkg/logger`, `pkg/security`, `pkg/skill`, `pkg/plugin`,
-  `pkg/utils`, `internal/config`, `internal/core/*`, `version`.
-* `docs/QUICKSTART.md`, `docs/api/api-reference.md`, `docs/guides/`,
-  `examples/`, `config/` (once the story above is coherent) — these ship inside
-  the archives.
-* `cmd/loopwatch` — not verified as broken here; if the owner confirms it hits
-  live endpoints it can stay as an operator tool, otherwise it joins item 3.
+### `docs/USAGE.md` now ships, and its prose still has no guard
+The README linked to it and the link was dead in the release tarball, so it was
+added to `archives[].files` — a support-free product should hand the customer its
+user guide. That makes its accuracy a release risk it was not before: it predates
+the canvas, the config loader and the auth work.
 
-## Integration requests (code changes I am not allowed to make)
+Its API routes are now covered: `relcheck`'s `checkDocumentedRoutes` compares
+every `/api/v1` path in a shipped document against `pkg/api/openapi.json`, which
+`TestOpenAPISpecMatchesRegisteredRoutes` keeps equal to the router. That check
+caught the one drift already present — `docs/api/api-reference.md` documenting
+`{taskId}` and `{id}` where the server registers `{taskID}`, so two documents that
+both ship in the same archive disagreed with each other.
 
-1. `pkg/api/api.go`: remove `//go:embed all:dist` + `webCanvas` + the catch-all
-   `/*` FileServer handler (the 301 loop), or make `/` return 200 with a
-   plain-text pointer to `docs/api/api-reference.md`.
-2. `cmd/loopworker/main.go`: switch `config.LoadConfig(cfgFile)` →
-   `config.Load(config.Options{ConfigFile: cfgFile, Flags: …})` so the documented
-   YAML schema is real; add a `loopworker config check` subcommand that prints the
-   resolved config (self-service diagnosis instead of a ticket).
-3. `cmd/loopctl`, `cmd/loopdebug`: repoint at existing routes, or accept removal
-   from the shipped surface.
-4. Either register `Server.HandleShutdown` (currently dead code, not on any
-   route) as `POST /api/v1/shutdown` behind auth, or delete it — the Windows smoke
-   test falls back to Ctrl+Break today because there is no graceful-shutdown
-   endpoint.
-5. `pkg/security` + `pkg/api`: issue/validate tokens so `/api/v1/*` can require
-   auth; the smoke scripts already send `Authorization: Bearer $LOOPWORKER_SMOKE_TOKEN`
-   when set, so the gates need no further change.
-6. Add `docs/product/` and `.workbuddy/` removal (or relocation) as an owner
-   decision; also decide whether `web/canvas` is deleted outright.
+What is still unverified is its **prose**: claims about the Go SDK, plugin
+development and configuration. A static check can prove a documented route exists;
+it cannot prove a paragraph is true. The preflight checklist requires re-reading
+it against the build.
+
+That re-read has happened once. It found the configuration example using
+`port` / `plugins_dir` / `data_dir` / `log_level` where the schema is nested
+(`server.port`, `plugins.dir`, `data.dir`, `logging.level`). It also found the
+guide asserting that the loader does not reject unknown keys, which was the
+opposite of the code and is now corrected. All 25 package-qualified Go
+identifiers the guide names, and all 11 sentinel errors it lists, do exist, so
+the rest of its API surface held up.
+
+### Unknown config keys are rejected, not ignored — settled
+This was recorded here as an open product decision and is now closed. The trade
+was whether a config carrying a stale or extra key should be a silent no-op or a
+startup failure. It is a startup failure: `internal/config/load.go` refuses an
+unrecognised key, names the closest accepted spelling when there is one, and
+prints every key it does accept.
+
+For a product with no support desk that is the only defensible answer — silence
+is the failure mode that becomes a ticket ("my port setting does nothing"), and
+there is no version to be lenient about, because the repository has zero tags and
+no config has ever been deployed. The cost is that a config written against an
+older schema now stops the server instead of half-working; that is a message
+telling the operator exactly which key to fix, not an outage.
+
+`docs/USAGE.md` and `.release/PRE-RELEASE-CHECKLIST.md` have been corrected to
+describe the behaviour that ships. `TestUnknownKeyNamesKeyFileAndAccepted` covers
+the message.
+
+### The container image is verified; running it needs one command
+The image builds, and a full run of it has now been done: with a credential
+supplied it stays up, answers `GET /api/v1/health` with 200 and the documented
+JSON body, goes Docker-`healthy`, and exits 0 on SIGTERM. The image is 15 MB,
+runs as uid 10001, and carries the canvas inside the binary (verified by finding
+the `assets/index-` references and the `<title>LoopWorker` string in
+`/usr/local/bin/loopworker`, so the whole embed chain — source, committed dist,
+`//go:embed`, compiler, image — is confirmed rather than assumed).
+
+Without a credential it exits 1 on purpose: the image binds `0.0.0.0`, and a
+public interface with no configured credential is refused. That is the right
+behaviour and the message says exactly what to do, but it means the first thing a
+new user types is `docker run ghcr.io/.../loopworker` and gets a container that
+dies. The fix is documentation, not code: the quick start should show the
+credential alongside the run command.
+
+`bash .release/scripts/docker-smoke.sh <image>` is the one-command form, and
+`release.yml` calls exactly that. It could not be executed here — this machine
+has no bash (WSL has no distribution installed) — so each gate's underlying
+docker commands were reproduced by hand and each passed.

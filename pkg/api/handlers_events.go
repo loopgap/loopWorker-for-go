@@ -61,7 +61,14 @@ func (s *APIServer) streamEventsLive(w http.ResponseWriter, r *http.Request) {
 		status, message := s.streamRejection(kind, caller)
 		w.Header().Set("Retry-After", "5")
 		sendError(w, r, &FieldError{Reason: message,
-			Fix:    "close an existing stream, or raise api.max_streams_per_caller / api.max_streams_total",
+			// Name the knob that exists. These used to read "raise
+			// api.max_streams_per_caller / api.max_streams_total", which are
+			// the field names in the admin listener's /runtime/stats -- reporting
+			// them as settings sends an operator to a config key and an
+			// environment variable that neither exist. Only the global
+			// ceiling is adjustable, and saying so is the honest answer for
+			// the per-caller one.
+			Fix:    "close an existing stream, or raise the global ceiling with LOOPWORKER_API_MAX_STREAMS (the per-caller ceiling is not adjustable)",
 			Status: status, Code: CodeStreamLimitReached})
 		return
 	}

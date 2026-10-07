@@ -372,8 +372,10 @@ func TestClientGetReadError(t *testing.T) {
 
 	c := NewAPIClient(ts.URL)
 	_, err := c.Get("/api/v1/tasks")
+	// Content-Length promises 100 bytes and the handler writes none, so the read
+	// must fail rather than hand back a truncated body as if it were whole.
 	if err == nil {
-		// May or may not error depending on timing - acceptable
+		t.Error("a response shorter than its Content-Length must be reported as an error")
 	}
 }
 
@@ -534,8 +536,11 @@ func TestClientGetReadBodyError(t *testing.T) {
 
 	c := NewAPIClient(ts.URL)
 	_, err := c.Get("/api/v1/tasks")
+	// The connection was hijacked and closed without a response, so there is
+	// nothing to decode: the call must fail instead of returning an empty result
+	// that a caller would read as "the server has no tasks".
 	if err == nil {
-		// May or may not error depending on timing
+		t.Error("a connection closed before any response must be reported as an error")
 	}
 }
 
@@ -562,10 +567,11 @@ func TestClientAllMethodsIntegration(t *testing.T) {
 			reply(t, w, http.StatusOK, map[string]any{"total": 1, "workflows": []map[string]any{{"id": "wf1"}}})
 		case "/api/v1/workflow/execute":
 			reply(t, w, http.StatusAccepted, map[string]any{"workflow_id": "wf1", "status": "executing"})
-		case "/api/v1/metrics":
-			json.NewEncoder(w).Encode(map[string]interface{}{"count": 42})
-		case "/api/v1/logs":
-			json.NewEncoder(w).Encode([]map[string]interface{}{{"level": "info"}})
+		// There is deliberately no /api/v1/metrics or /api/v1/logs case here.
+		// The real server registers neither: metrics and logs live on the
+		// loopback admin listener. A fake that served them is what let this
+		// file "prove" the client worked against a contract the product never
+		// had, and re-adding one would hide the same regression again.
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -633,21 +639,18 @@ func TestClientAllMethodsIntegration(t *testing.T) {
 		t.Errorf("expected executing, got %v", result["status"])
 	}
 
-	// GetMetrics
-	metrics, err := c.GetMetrics()
-	if err != nil {
-		t.Fatalf("GetMetrics: %v", err)
+	// GetMetrics and GetLogs are the two methods that cannot work against a
+	// real server, and they now say so instead of spending a request to be told
+	// "404". The assertion is on the message, not just on err != nil: the whole
+	// value of the method is that the error names where metrics actually live.
+	if _, err := c.GetMetrics(); err == nil {
+		t.Error("GetMetrics must fail: there is no metrics route on the public API")
+	} else if !strings.Contains(err.Error(), "admin listener") {
+		t.Errorf("GetMetrics error must point the operator at the admin listener, got: %v", err)
 	}
-	if metrics["count"] != float64(42) {
-		t.Errorf("expected 42, got %v", metrics["count"])
-	}
-
-	// GetLogs
-	logs, err := c.GetLogs()
-	if err != nil {
-		t.Fatalf("GetLogs: %v", err)
-	}
-	if len(logs) != 1 {
-		t.Errorf("expected 1 log, got %d", len(logs))
+	if _, err := c.GetLogs(); err == nil {
+		t.Error("GetLogs must fail: there is no logs route on the public API")
+	} else if !strings.Contains(err.Error(), "admin listener") {
+		t.Errorf("GetLogs error must point the operator at the admin listener, got: %v", err)
 	}
 }

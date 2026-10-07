@@ -198,18 +198,18 @@ func applyMigrations(ctx context.Context, db *sql.DB, path string) error {
 			return fmt.Errorf("scheduler: begin migration %d (%s) on %s: %w", m.Version, m.Name, path, ErrStorageUnavailable)
 		}
 		if _, err := tx.ExecContext(ctx, createSchemaVersionTable); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("scheduler: migration %d (%s): %w", m.Version, m.Name, err)
 		}
 		if err := m.Apply(ctx, tx); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("scheduler: migration %d (%s) failed on %s: %w (the database was left at v%d; "+
 				"restore a backup of it before retrying)", m.Version, m.Name, path, ErrStorageUnavailable, current)
 		}
 		if _, err := tx.ExecContext(ctx,
 			"INSERT OR REPLACE INTO schema_version(version, name, applied_at) VALUES (?, ?, ?)",
 			m.Version, m.Name, time.Now().UnixNano()); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("scheduler: record schema version %d: %w", m.Version, ErrStorageUnavailable)
 		}
 		if err := tx.Commit(); err != nil {
@@ -255,9 +255,9 @@ func (s *sqliteStore) opErr(op, id string, err error) error {
 	s.storageErrors.Add(1)
 	if isNoSpace(err) {
 		return fmt.Errorf("scheduler: %s task %s: %w (no space left on the volume holding %s: free space, "+
-			"or lower retention limits, then retry): %v", op, id, ErrStorageUnavailable, s.path, err)
+			"or lower retention limits, then retry): %w", op, id, ErrStorageUnavailable, s.path, err)
 	}
-	return fmt.Errorf("scheduler: %s task %s in %s: %w: %v", op, id, s.path, lwerrors.ErrDatabaseError, err)
+	return fmt.Errorf("scheduler: %s task %s in %s: %w: %w", op, id, s.path, lwerrors.ErrDatabaseError, err)
 }
 
 func (s *sqliteStore) save(t *Task) error {
@@ -499,7 +499,7 @@ func (s *sqliteStore) info() StorageInfo {
 		out.SizeBytes = size
 	}
 	var rows int64
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&rows); err == nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks").Scan(&rows); err == nil {
 		out.Rows = rows
 	}
 	if v := s.lastPrune.Load(); v != nil {

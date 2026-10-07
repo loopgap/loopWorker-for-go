@@ -16,6 +16,7 @@ import (
 // middleware_Recoverer converts a handler panic into a 500 envelope instead of a
 // bare stack dump, and records the stack under the request id.
 func middleware_Recoverer() func(http.Handler) http.Handler {
+	//nolint:contextcheck // the panic handler reads the request context it already holds; it takes no derived context
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
@@ -88,6 +89,35 @@ func logBootstrapCredential(auth *security.Authenticator) {
 	)
 }
 
+// IsLoopbackAddr reports whether addr names the loopback interface and nothing
+// else.
+//
+// An empty host is deliberately NOT loopback. Both ":19527" and "0.0.0.0:19527"
+// bind every interface, so a server that classified either as private would be
+// reachable from the network while reasoning that it was not. Callers that want
+// "no address given" to mean "skip the check" must test for that themselves,
+// which ValidateBindAddress does.
+func IsLoopbackAddr(addr string) bool {
+	addr = strings.TrimSpace(addr)
+	// Match the bare forms first. A bare IPv6 literal has no port, so splitting
+	// on the last colon would cut "::1" down to ":" and lose the address.
+	switch addr {
+	case "127.0.0.1", "::1", "localhost":
+		return true
+	}
+	host := addr
+	if idx := strings.LastIndex(addr, ":"); idx >= 0 {
+		host = addr[:idx]
+	}
+	host = strings.Trim(host, "[]")
+	switch host {
+	case "127.0.0.1", "::1", "localhost":
+		return true
+	}
+	// The whole 127.0.0.0/8 block is loopback, not just 127.0.0.1.
+	return strings.HasPrefix(host, "127.")
+}
+
 // ValidateBindAddress refuses a writable API bound to a public interface
 // without configured credentials. The integration pass must call it with the
 // listen address before serving.
@@ -95,14 +125,10 @@ func ValidateBindAddress(addr string, auth *security.Authenticator) error {
 	if addr == "" {
 		return nil
 	}
-	host := addr
-	if idx := strings.LastIndex(addr, ":"); idx >= 0 {
-		host = addr[:idx]
+	if IsLoopbackAddr(addr) {
+		return nil
 	}
-	host = strings.Trim(host, "[]")
-
-	loopback := host == "" || host == "127.0.0.1" || host == "::1" || host == "localhost" || strings.HasPrefix(host, "127.")
-	if !loopback && auth != nil && !auth.HasCredentials() {
+	if auth != nil && !auth.HasCredentials() {
 		return &FieldError{
 			Field:  "bind_address",
 			Reason: "the API would listen on " + addr + " using only an ephemeral bootstrap key",

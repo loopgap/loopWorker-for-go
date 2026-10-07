@@ -191,6 +191,12 @@ func BuildComponents(cfg *config.Config) (*Components, error) {
 		api.WithAuth(authCfg),
 		api.WithAdminListener(api.DefaultAdminBind, cfg.Server.AdminPort),
 		api.WithEnvOverrides(),
+		// Local trust: the operator turned authentication off, configured no
+		// credential to use, AND the listener is loopback-bound. All three are
+		// required - a configured key must always take effect, and Start() refuses
+		// to serve on a public interface without real credentials, so this can
+		// never become an unauthenticated API reachable from a network.
+		api.WithLocalTrust(!cfg.Security.AuthRequired && len(authCfg.Keys) == 0 && api.IsLoopbackAddr(cfg.Addr())),
 	)
 
 	return c, nil
@@ -245,10 +251,15 @@ func maxDuration(a, b time.Duration) time.Duration {
 // EnsureDirs creates the directories a component needs, refusing empty paths so
 // a misconfiguration cannot silently produce "mkdir :".
 func EnsureDirs(dirs ...string) error {
+	// Validate every path before creating any of them. Creating as it went meant
+	// EnsureDirs("good", "") built "good" and only then failed, leaving a
+	// half-applied configuration behind on disk.
 	for _, dir := range dirs {
 		if strings.TrimSpace(dir) == "" {
 			return fmt.Errorf("refusing to create an empty directory path; check data.dir, plugins.dir and work_dir")
 		}
+	}
+	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create directory %s: %w", dir, err)
 		}
@@ -373,7 +384,7 @@ func (s *Server) Start() error {
 func (s *Server) boot(ctx context.Context) (net.Listener, error) {
 	cfg, components := s.cfg, s.components
 
-	diag := Diagnose(cfg)
+	diag := diagnose(ctx, cfg)
 	s.mu.Lock()
 	s.diag = diag
 	s.mu.Unlock()
@@ -382,7 +393,7 @@ func (s *Server) boot(ctx context.Context) (net.Listener, error) {
 		return nil, err
 	}
 
-	ln, err := net.Listen("tcp", cfg.Addr())
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.Addr())
 	if err != nil {
 		return nil, portError(cfg, err)
 	}
@@ -396,6 +407,10 @@ func (s *Server) boot(ctx context.Context) (net.Listener, error) {
 	if err := api.ValidateBindAddress(cfg.Addr(), components.APIServer.Authenticator()); err != nil {
 		return nil, err
 	}
+	// Hand the lifecycle handlers to the admin listener before it builds its
+	// router. SetAdminControl rather than WithAdminControl because the Server
+	// value does not exist yet when BuildComponents constructs the API server.
+	components.APIServer.SetAdminControl(adminControl{srv: s})
 	// The admin listener carries /metrics and friends; it is observability, not
 	// the service. A port collision there must not stop a server whose API port
 	// is free, so it degrades to a warning naming the remedy.
@@ -408,7 +423,7 @@ func (s *Server) boot(ctx context.Context) (net.Listener, error) {
 		s.adminServer = admin
 		s.mu.Unlock()
 		logger.Info("admin listener bound", zap.String("address", admin.Addr),
-			zap.String("endpoints", "/metrics, /runtime/stats, /logs, /events/stats"))
+			zap.String("endpoints", "/metrics, /runtime/stats, /logs, /events/stats, /statusz, POST /shutdown"))
 	}
 
 	if err := components.Observer.Start(ctx); err != nil {
@@ -466,6 +481,7 @@ func (s *Server) startWorkers(ctx context.Context, run *PluginRun) error {
 		if err := s.components.Executor.StartWorker(ctx, id, pluginID); err != nil {
 			for _, prev := range started {
 				stopCtx, cancel := context.WithTimeout(context.Background(), s.cfg.Server.ShutdownTimeout)
+				//nolint:contextcheck // rolling back started workers must work even when the boot context is what failed
 				_ = s.components.Executor.StopWorker(stopCtx, prev)
 				cancel()
 			}
@@ -619,14 +635,33 @@ func (s *Server) handler() http.Handler {
 	components := s.components
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.HealthHandler())
-	mux.HandleFunc("/statusz", s.StatusHandler())
-	mux.HandleFunc("/shutdown", s.HandleShutdown)
+	// /shutdown and /statusz used to be registered here, on the listener anyone
+	// can reach, with no credential: a POST to /shutdown stopped the process and
+	// GET /statusz printed scheduler and security internals. They are served by
+	// the admin listener now, behind the admin permission - see Start, where
+	// SetAdminControl hands them over.
+	//
 	// Authentication is pkg/api's job, in one place, with one credential set
 	// (see authConfigFor). A second gate here used to read security.api_key
 	// independently, which meant the file key and the environment keys were two
 	// systems that could disagree about who is allowed in.
 	mux.Handle("/", components.APIServer.Router)
 	return mux
+}
+
+// adminControl adapts the Server to the lifecycle surface pkg/api exposes on
+// the admin listener. The two handlers are the Server's own existing methods,
+// unchanged - only the listener they are reachable from moves.
+type adminControl struct {
+	srv *Server
+}
+
+func (a adminControl) AdminShutdown(w http.ResponseWriter, r *http.Request) {
+	a.srv.HandleShutdown(w, r)
+}
+
+func (a adminControl) AdminStatus(w http.ResponseWriter, r *http.Request) {
+	a.srv.StatusHandler()(w, r)
 }
 
 // GetComponents returns the server's components.
@@ -826,11 +861,24 @@ func (s *Server) GetStatus() *StatusResponse {
 	return &StatusResponse{
 		Status:     s.State(),
 		Version:    versionString(),
-		Uptime:     time.Since(s.startedAt()).String(),
+		Uptime:     uptime(s.startedAt()),
 		Addr:       s.cfg.Addr(),
 		Components: componentsState,
 		Stats:      stats,
 	}
+}
+
+// uptime renders how long the process has been serving. startTime is only set
+// by Start, and GetStatus is exported, so a host that asks before Start would
+// otherwise be told the process has been up for 2562047h47m16s — the saturation
+// value of a duration measured from the zero time. "not started" is the answer
+// that is actually true, and unlike a duration it cannot be misread as a real
+// number by anything that parses this.
+func uptime(started time.Time) string {
+	if started.IsZero() {
+		return "not started"
+	}
+	return time.Since(started).String()
 }
 
 // HandleShutdown stops the server when POSTed to; used by operators that cannot
@@ -843,8 +891,11 @@ func (s *Server) HandleShutdown(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "shutting_down"})
 
-	utils.GoSafe(context.Background(), func(context.Context) {
+	utils.GoSafe(context.Background(), func(context.Context) { //nolint:contextcheck // the handler returns immediately; the stop must not ride on the request context
 		time.Sleep(100 * time.Millisecond)
+		// Stop builds its own drain contexts on purpose: it has just cancelled
+		// the server context, so inheriting one would skip the graceful drain.
+		//nolint:contextcheck
 		if err := s.Stop(); err != nil {
 			fmt.Fprintf(os.Stderr, "Shutdown error: %v\n", err)
 		}

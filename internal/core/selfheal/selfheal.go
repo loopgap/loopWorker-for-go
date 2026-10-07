@@ -295,7 +295,7 @@ func (sh *SelfHealer) RunHealthCheck(ctx context.Context, check *HealthCheck) He
 	// A check that ignored its context and only returned because we cancelled
 	// it is reported as a timeout, not as its own verdict.
 	if err != nil && checkCtx.Err() == context.DeadlineExceeded {
-		err = fmt.Errorf("%w after %s: %v", errCheckTimeout, timeout, err)
+		err = fmt.Errorf("%w after %s: %w", errCheckTimeout, timeout, err)
 	} else if err != nil {
 		err = fmt.Errorf("%w: %w", errCheckFailed, err)
 	}

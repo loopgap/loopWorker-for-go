@@ -35,6 +35,7 @@ func openStream(t *testing.T, srv *httptest.Server, key string, query string) *s
 	}
 	req.Header.Set("X-API-Key", key)
 
+	//nolint:bodyclose // the response body stays open for the whole session; sseSession.Close is what closes it
 	resp, err := srv.Client().Do(req)
 	if err != nil {
 		cancel()
@@ -222,10 +223,7 @@ func TestB6StreamReleasesItsSlotOnDisconnect(t *testing.T) {
 	// deterministic: a successful probe would itself occupy the slot and block
 	// until it is cancelled.
 	deadline := time.After(3 * time.Second)
-	for {
-		if env.streams.Total() == 0 {
-			break
-		}
+	for env.streams.Total() != 0 {
 		select {
 		case <-deadline:
 			t.Fatalf("the stream slot was never released: %d still held", env.streams.Total())

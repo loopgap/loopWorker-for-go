@@ -41,7 +41,7 @@ LDFLAGS = -ldflags "-s -w \
 # Product binary (what a customer downloads) vs. developer CLIs (not shipped in
 # release artifacts — see .release/SCOPE-PROPOSAL.md).
 PRODUCT   := loopworker
-DEV_CLIS  := loopctl loopdebug loopwatch loopbench loopsim
+DEV_CLIS  := loopctl
 BINARIES  := $(PRODUCT) $(DEV_CLIS)
 
 # Toolchain presence is checked at parse time so `make lint` fails with a clear

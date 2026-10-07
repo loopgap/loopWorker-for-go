@@ -4,7 +4,7 @@
 
 ```
 module loopworker
-go 1.26.1
+go 1.26.6
 ```
 
 `loopworker` is **not a valid remote import path**. Consequences for a

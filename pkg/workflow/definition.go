@@ -69,7 +69,7 @@ func (s StepDefinition) TimeoutDuration() (time.Duration, error) {
 	}
 	d, err := time.ParseDuration(text)
 	if err != nil {
-		return 0, fmt.Errorf("step %q: timeout %q is not a duration (write 30s, 2m, 1h): %v", s.ID, s.Timeout, err)
+		return 0, fmt.Errorf("step %q: timeout %q is not a duration (write 30s, 2m, 1h): %w", s.ID, s.Timeout, err)
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("step %q: timeout must be positive, got %q", s.ID, s.Timeout)

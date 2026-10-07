@@ -7,9 +7,11 @@
 #   1. the container reaches "running" and stays there for BOOT_WAIT seconds
 #      (no crash-loop / restart-loop);
 #   2. GET /api/v1/health returns HTTP 200 with a JSON body whose status is
-#      healthy|degraded — with an Authorization: Bearer token attached when
-#      LOOPWORKER_SMOKE_TOKEN is set (forward-compatible with the API gaining
-#      auth; today /api/v1/* is unauthenticated, see SECURITY.md);
+#      healthy|degraded. The container is given a throwaway credential, because
+#      the image sets LOOPWORKER_SERVER_HOST=0.0.0.0 and the server refuses to
+#      start on a public interface without one — so a smoke run that supplied
+#      no key never reached the probe at all; it just watched a dead container.
+#      LOOPWORKER_SMOKE_TOKEN, if set, is sent as a bearer token as well.
 #   3. `docker stop` (SIGTERM) terminates the process with exit code 0 within
 #      STOP_TIMEOUT seconds => graceful shutdown really works.
 #
@@ -27,6 +29,21 @@ STOP_TIMEOUT="${STOP_TIMEOUT:-25}"
 NAME="loopworker-smoke-$$"
 TOKEN="${LOOPWORKER_SMOKE_TOKEN:-}"
 
+# The container needs a credential to boot at all: the image binds 0.0.0.0, and
+# ValidateBindAddress refuses a public interface while only an ephemeral
+# per-process key exists. This mirrors .release/scripts/boot-smoke.sh so the two
+# gates cannot disagree about what "authenticated" means.
+SMOKE_KEY="${LOOPWORKER_SMOKE_API_KEY:-lwk_smoke_0123456789abcdef}"
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | cut -d' ' -f1
+  else
+    printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1
+  fi
+}
+KEY_HASH="$(sha256_of "$SMOKE_KEY")"
+API_KEYS="smoke:admin:$KEY_HASH"
+
 fails=0
 step() { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf 'PASS  %s\n' "$*"; }
@@ -37,6 +54,7 @@ docker info >/dev/null 2>&1 || { echo "docker daemon unreachable (is it running?
 
 cleanup() {
   docker rm -f "$NAME" >/dev/null 2>&1 || true
+  rm -f "$health_body" "$hdr" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -54,6 +72,7 @@ docker run -d --name "$NAME" \
   --security-opt=no-new-privileges \
   -p "127.0.0.1:${PORT}:19527" \
   -e LOOPWORKER_LOG_LEVEL=debug \
+  -e "LOOPWORKER_API_KEYS=${API_KEYS}" \
   "$IMAGE" >/dev/null || { echo "docker run failed"; exit 1; }
 
 running=0
@@ -78,11 +97,22 @@ uid=$(docker exec "$NAME" id -u 2>/dev/null || echo unknown)
 if [ "$uid" != "0" ] && [ "$uid" != "unknown" ]; then ok "runs as uid=$uid"; else bad "container runs as uid=$uid (expected non-root)"; fi
 
 step "4. GET /api/v1/health must return 200 + JSON status"
-health_body=""
-health_code=""
+# Both capture files are created once, before the poll, and removed by the
+# cleanup trap.
+#
+# The body file cannot start life as an empty string: curl rejects a blank -o
+# target outright ("curl: option -o: blank argument where content is expected",
+# exit 2) and writes nothing, so the header check below would then read no file
+# at all. Because stderr was discarded and `|| echo 000` supplied the fallback,
+# the gate reported "HTTP 000" against a container that was answering 200 — this
+# script could not pass on any input, and nothing noticed because it had never
+# been executed. Creating the files inside the loop instead leaked one pair per
+# attempt, and the loop runs thirty times.
+health_body="$(mktemp)"
+hdr="$(mktemp)"
 for i in $(seq 1 30); do
-  hdr=$(mktemp)
   args=(-sS -o "$health_body" -D "$hdr" -w '%{http_code}' --max-time 5 "http://127.0.0.1:${PORT}/api/v1/health")
+  args+=(-H "X-API-Key: ${SMOKE_KEY}")
   [ -n "$TOKEN" ] && args+=(-H "Authorization: Bearer ${TOKEN}")
   health_code=$(curl "${args[@]}" 2>/dev/null || echo "000")
   [ "$health_code" = "200" ] && break
@@ -100,7 +130,6 @@ else
   echo "     body: $(head -c 400 "$health_body" 2>/dev/null)"
   docker logs --tail 60 "$NAME" || true
 fi
-rm -f "$hdr" 2>/dev/null || true
 
 step "5. Docker HEALTHCHECK must go green (not just the process being alive)"
 hc=""

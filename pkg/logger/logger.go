@@ -63,10 +63,17 @@ func Get() *zap.Logger {
 	}
 	globalMu.RUnlock()
 
-	// Initialize with defaults
-	Init("info", false)
+	// Initialize with defaults. Init cannot fail with these arguments, but a nil
+	// logger returned here would panic every caller downstream, so the fallback
+	// is explicit rather than an ignored error.
+	if err := Init("info", false); err != nil {
+		return zap.NewNop()
+	}
 	globalMu.RLock()
 	defer globalMu.RUnlock()
+	if globalLogger == nil {
+		return zap.NewNop()
+	}
 	return globalLogger
 }
 

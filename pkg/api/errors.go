@@ -111,7 +111,7 @@ func init() {
 	register(lwerrors.ErrTaskNotFound, http.StatusNotFound, CodeTaskNotFound,
 		"No task with that id exists on this server. Fix: list visible tasks with GET /api/v1/tasks, or create one with POST /api/v1/tasks. Task ids are returned in the response body of the create call.")
 	register(lwerrors.ErrTaskInvalid, http.StatusConflict, CodeTaskStateConflict,
-		"The task exists but its current state forbids this operation (for example it already reached a terminal state, or a dependency has not completed). Fix: GET /api/v1/tasks/{id} and read \"state\" before retrying; terminal states are completed, failed, cancelled and dead_letter.")
+		"The task exists but its current state forbids this operation (for example it already reached a terminal state, or a dependency has not completed). Fix: GET /api/v1/tasks/{taskID} and read \"state\" before retrying; terminal states are completed, failed, cancelled and dead_letter.")
 	register(lwerrors.ErrTaskAlreadyExists, http.StatusConflict, CodeTaskAlreadyExists,
 		"A task with that identity already exists. Fix: reuse the existing task id, or POST /api/v1/tasks to let the server allocate a new one.")
 	register(lwerrors.ErrWorkflowNotFound, http.StatusNotFound, CodeWorkflowNotFound,
@@ -171,7 +171,7 @@ func classify(err error) classification {
 		return classification{
 			status:  http.StatusRequestEntityTooLarge,
 			code:    CodeRequestTooLarge,
-			message: "Request body exceeds the configured limit. Fix: reduce the payload or raise api.max_body_bytes in the config file.",
+			message: "Request body exceeds the configured limit. Fix: reduce the payload, or raise LOOPWORKER_API_MAX_BODY_BYTES and restart. There is no config-file key for it.",
 		}
 	}
 

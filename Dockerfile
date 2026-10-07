@@ -66,6 +66,21 @@ RUN apk add --no-cache ca-certificates tzdata curl && \
 
 COPY --from=builder /out/loopworker /usr/local/bin/loopworker
 
+# Attribution travels with the image. Only the binary was copied above, so a
+# customer who pulled this from a registry held a redistributable with no
+# licence and no notice in it — the same gap the deb and the rpm had, and
+# `ghcr.io/.../loopworker:<tag>` is a distribution channel in exactly the sense
+# the tarball is.
+#
+# This is LICENSE, NOTICE and README rather than the whole document set on
+# purpose. `.dockerignore` keeps `docs/` and `*.md` out of the build context
+# because they are not inputs to the binary, and putting them in would
+# invalidate every layer above on each documentation edit. Those three files are
+# either extensionless or explicitly negated back in, so they are already here,
+# and copying them is a few kilobytes against a 32 MB binary. /licenses is the
+# path GitHub documents for exactly this.
+COPY LICENSE NOTICE README.md /licenses/
+
 # /data is the only writable path; run with `--read-only --tmpfs /data` or a
 # volume mounted at /data.
 #

@@ -37,7 +37,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
 $Product  = 'loopworker'
-$DevClis  = @('loopctl','loopdebug','loopwatch','loopbench','loopsim')
+$DevClis  = @('loopctl')
 $BinDir   = Join-Path $RepoRoot 'bin'
 
 function Write-Step([string]$m) { Write-Host "==> $m" -ForegroundColor Cyan }
@@ -95,6 +95,49 @@ $ldflags = @(
 $Targets = @($Product)
 if ($AllClis) { $Targets += $DevClis }
 
+# --- tool versions -----------------------------------------------------------
+# CI installs pinned tool versions (.github/workflows/ci.yml); this script runs
+# whatever is in PATH, because it has to work on a machine that has never seen
+# CI. Those are then not the same check, and "it passed on my machine" stops
+# being evidence - a scanner three versions behind misses advisories silently
+# rather than reporting them. So the version actually used is compared against
+# the CI pin and a mismatch is reported.
+#
+# The comparison is offline: `go version -m` reads the binary's own build info,
+# so it cannot fail for want of a network, which is the other way a version
+# check degrades into silence.
+$CiPins = @{}
+function Read-CiToolPins {
+    $ci = Join-Path $RepoRoot '.github\workflows\ci.yml'
+    if (-not (Test-Path $ci)) { return }
+    foreach ($l in [System.IO.File]::ReadAllLines($ci)) {
+        if ($l -match '^\s*([A-Z][A-Z_]*_VERSION):\s*(\S+)\s*$') { $CiPins[$Matches[1]] = $Matches[2] }
+    }
+}
+
+function Compare-ToolWithCi([string]$label, [string]$pinKey, [string]$exePath) {
+    if (-not $CiPins.ContainsKey($pinKey)) {
+        Write-Host "    WARN CI declares no $pinKey, so the local $label version cannot be compared" -ForegroundColor Yellow
+        return
+    }
+    $pin = $CiPins[$pinKey]
+    $got = $null
+    foreach ($l in (& $go version -m $exePath 2>$null)) {
+        if ($l -match '^\s+mod\s+\S+\s+(v\S+)\s') { $got = $Matches[1]; break }
+    }
+    if (-not $got) {
+        Write-Host "    WARN could not read the $label build info; CI runs $pin" -ForegroundColor Yellow
+        return
+    }
+    if ($got -ne $pin) {
+        Write-Host "    WARN $label in PATH is $got but CI pins $pin - this is not the same check CI runs." -ForegroundColor Yellow
+        Write-Host "         An older scanner reports fewer advisories, not fewer problems." -ForegroundColor Yellow
+    } else {
+        Write-Host "    OK  $label $got matches the CI pin" -ForegroundColor Green
+    }
+}
+Read-CiToolPins
+
 # ------------------------------------------------------------------ tasks --
 function Do-Build {
     Write-Step "build $Version ($Module) for windows/amd64 -> bin\<name>.exe"
@@ -130,6 +173,7 @@ function Do-Lint {
     Write-Step 'golangci-lint run ./...'
     $gl = Get-Tool 'golangci-lint'
     if (-not $gl) { Write-Skip 'golangci-lint not installed (CI job `quality` runs it)'; return }
+    Compare-ToolWithCi 'golangci-lint' 'GOLANGCI_VERSION' $gl
     & $gl run ./...
     if ($LASTEXITCODE -ne 0) { throw 'golangci-lint failed' }
 }
@@ -138,6 +182,7 @@ function Do-Vuln {
     Write-Step 'govulncheck ./...'
     $gv = Get-Tool 'govulncheck'
     if (-not $gv) { Write-Skip 'govulncheck not installed (CI job `quality` runs it)'; return }
+    Compare-ToolWithCi 'govulncheck' 'GOVULNCHECK_VERSION' $gv
     & $gv ./...
     if ($LASTEXITCODE -ne 0) { throw 'govulncheck found vulnerabilities' }
 }
@@ -185,9 +230,15 @@ function Do-Release {
     } finally { Pop-Location }
     $gr = Get-Tool 'goreleaser'
     if (-not $gr) { Write-Skip 'goreleaser not installed; ran relcheck only'; return }
+    Compare-ToolWithCi 'goreleaser' 'GORELEASER_VERSION' $gr
     & $gr check
     if ($LASTEXITCODE -ne 0) { throw 'goreleaser check failed' }
-    & $gr release --snapshot --clean --skip=publish
+    # sbom and sign are skipped because they shell out to syft and cosign, which
+    # only exist on the CI publish path. Running them here would fail every time
+    # with "executable file not found in %PATH%" on any machine that is not the
+    # release runner, and the message says nothing about why. This matches the
+    # dry run documented in .goreleaser.yaml and release.yml.
+    & $gr release --snapshot --clean --skip=publish,sbom,sign
     if ($LASTEXITCODE -ne 0) { throw 'goreleaser snapshot release failed' }
     Write-Ok "artifacts in .\dist (check dist\checksums.txt)"
 }

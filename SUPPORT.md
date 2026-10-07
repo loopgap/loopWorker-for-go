@@ -66,9 +66,10 @@ Two honest caveats about that table:
 Not shipped, and therefore not supported: Windows arm64, 32-bit anything,
 FreeBSD, Solaris/AIX, `web/canvas` as a product feature, and the extra CLIs
 flagged in `.release/SCOPE-PROPOSAL.md`. **Releases ship only the
-`loopworker` binary** — the other five (`loopctl`, `loopdebug`, `loopwatch`,
-`loopbench`, `loopsim`) are developer tools you build from source. If you
-need one of those in a release, that is a feature request in the open-source
+`loopworker` binary** — `loopctl` is a developer tool you build from source, and
+the other four (`loopdebug`, `loopwatch`, `loopbench`, `loopsim`) were
+**deleted**, so there is nothing left to build. If you
+need a CLI in a release, that is a feature request in the open-source
 community process — not a support case.
 
 ## Requirements

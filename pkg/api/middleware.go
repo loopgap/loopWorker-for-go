@@ -81,12 +81,26 @@ func (b *middlewareBundle) principalLimit(next http.Handler) http.Handler {
 }
 
 // authMiddleware authenticates every route under the mounted group.
+//
+// In local trust mode there is no credential to check: the host bound the
+// listener to loopback and the operator turned authentication off, so every
+// request is the operator. See local_trust.go for why that is bounded.
 func (b *middlewareBundle) authMiddleware(next http.Handler) http.Handler {
+	if b.cfg.LocalTrust {
+		return authenticateLocalTrust(next)
+	}
 	return b.auth.RequireAuth()(next)
 }
 
 // permissionMiddleware requires a permission for the wrapped routes.
+//
+// Local trust mode short-circuits because the synthetic principal is already an
+// administrator; RequirePermission would pass anyway, and saying so explicitly
+// keeps the intent readable.
 func (b *middlewareBundle) require(perm security.Permission) func(http.Handler) http.Handler {
+	if b.cfg.LocalTrust {
+		return func(next http.Handler) http.Handler { return next }
+	}
 	return b.auth.RequirePermission(perm)
 }
 

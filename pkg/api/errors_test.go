@@ -44,14 +44,11 @@ func assertNoLeak(t *testing.T, label, body string) {
 // errorCase is one row of the SPEC 10-B7 table: a request, the status it must
 // produce, and the code a client branches on.
 type errorCase struct {
-	name   string
-	role   string
-	method string
-	path   string
-	body   string
-	// setup runs before the request so the case can build state.
-	setup func(e *testEnv) string
-	// wantTaskID is filled by setup when the request needs a real id.
+	name       string
+	role       string
+	method     string
+	path       string
+	body       string
 	wantStatus int
 	wantCode   ErrorCode
 	// wantFix requires the message to carry a remedy ("Fix:").
