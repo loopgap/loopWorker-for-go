@@ -42,8 +42,8 @@ jobs:
     name: Workflow & release-config lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           check-latest: false
@@ -78,8 +78,8 @@ jobs:
     name: Release pipeline consistency
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: relcheck (go.mod vs Dockerfile vs workflows vs ldflags vs embeds)
@@ -92,7 +92,7 @@ jobs:
         working-directory: .release/tools
         run: go test ./... -count=1
       - name: goreleaser check
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: ${{ env.GORELEASER_VERSION }}
           args: check
@@ -102,7 +102,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Check Signed-off-by trailer
@@ -138,8 +138,8 @@ jobs:
     name: Format, vet, lint, vulns (blocking)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -178,8 +178,8 @@ jobs:
         # CI for a Go version nobody ships.
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Build
@@ -191,8 +191,8 @@ jobs:
     name: Race detector (ALL packages)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: go test -race ./...
@@ -215,8 +215,8 @@ jobs:
       run:
         working-directory: web/canvas
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
@@ -246,8 +246,8 @@ jobs:
     name: Coverage gate (>= 80%)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Test with cross-package coverage
@@ -271,7 +271,7 @@ jobs:
         if: always()
         run: go tool cover -html=coverage.out -o coverage.html
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: |
@@ -283,8 +283,8 @@ jobs:
     name: Boot smoke test (Linux binary)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Build static binary (CGO_ENABLED=0)
@@ -298,8 +298,8 @@ jobs:
     name: Boot smoke test (Windows .exe)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       # The bug this job kills: `make build` on Windows wrote bin/loopworker with
@@ -322,7 +322,7 @@ jobs:
     name: Docker build + boot/SIGTERM smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Derive GO_VERSION from go.mod (no drifting pins)
         id: gov
         run: |
@@ -330,7 +330,7 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "go.mod Go version => $v"
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
@@ -358,8 +358,8 @@ jobs:
     name: Third-party license text (go-licenses)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Generate notices for statically linked dependencies
@@ -370,7 +370,7 @@ jobs:
           go-licenses report ./... > THIRD-PARTY-NOTICES.csv
           test -d THIRD-PARTY-LICENSES
           echo "### generated file count: $(find THIRD-PARTY-LICENSES -type f | wc -l)"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: third-party-notices
           path: |
@@ -389,8 +389,8 @@ jobs:
     name: Release SBOM generation (syft, real run)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Install syft (invoked by the sboms block in .goreleaser.yaml)
@@ -398,7 +398,7 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
           syft version
       - name: goreleaser release --snapshot, SBOM step enabled
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: ${{ env.GORELEASER_VERSION }}
           args: release --snapshot --clean --skip=publish,sign
@@ -472,7 +472,7 @@ jobs:
                         % (os.path.basename(sbom), len(shipped), len(shipped)))
           sys.exit(1 if failed else 0)
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: spdx-sboms
